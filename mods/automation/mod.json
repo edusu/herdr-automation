@@ -1,0 +1,9 @@
+{
+  "place": "none",
+  "title": "Automations",
+  "overlay": {
+    "kind": "dialog",
+    "width": 720,
+    "height": 640
+  }
+}
