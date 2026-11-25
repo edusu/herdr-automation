@@ -165,7 +165,7 @@ Commands: `mod.open:automation` opens or closes the dialog. Toasts carry `pane.f
 
 ## Limits
 
-- Runs happen only while Herdr is open, and only while the `automation` block is in the layout Herdr shows (hidden behind its button is fine) or the dialog is open.
+- Runs happen only while Herdr is open, and only while a copy of the mod has started in the layout Herdr shows. Herdr starts a copy the first time it is shown, so a panel hidden behind its button fires nothing until it has been opened once. The engine block of the install steps (`props: { "part": "engine" }`, 0 px) is always shown and starts with Herdr. The dialog's copy never fires Runs.
 - One computer: agents on other machines are not seen, and Runs start only here.
 - macOS and Linux, through `sh`. No Windows.
 - Schedules use the computer's local time; there are no time zones per Automation.

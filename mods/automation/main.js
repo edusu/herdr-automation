@@ -28,6 +28,9 @@ const cleaned = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v 
 export default class Automation extends View {
   init(_props, cx) {
     this.overlay = props()?.overlay ?? null;
+    // A block with props {part: "engine"} draws nothing: Herdr starts a copy only once it has
+    // shown, so a panel hidden behind its button would fire nothing until someone opened it.
+    this.headless = props()?.part === "engine";
     this.settings = DEFAULT_SETTINGS;
     this.problems = [];
     this.store = store(`${appHome()}/data/automation`, io);
@@ -67,6 +70,7 @@ export default class Automation extends View {
     cx.spawn(async (cx) => {
       // The dialog's copy never leads: Herdr cancels its tasks soon after it closes.
       try { if (!this.overlay) await this.engine.tick(); this.error = null; } catch (e) { this.error = `The engine stopped a tick: ${e?.message ?? e}`; }
+      if (this.headless) return;
       await this.reload();
       // Each redraw redraws the window: only for a change on screen, which the form does not show.
       if (this.screen.name !== "form" && host.visible() && (this.dirty || this.elapsed() !== this.shownElapsed)) cx.notify();
@@ -306,6 +310,7 @@ export default class Automation extends View {
   }
 
   render() {
+    if (this.headless) return div();
     const t = theme();
     this.dirty = false;
     this.shownElapsed = this.elapsed();

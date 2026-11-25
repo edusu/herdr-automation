@@ -21,10 +21,16 @@ You are the agent installing it. Read `~/.config/herdr-app/AGENTS.md` first. Do 
      "action": { "type": "panel", "container": "panel", "stack": "panel-body", "target": "automation" } }
    ```
 
-4. **Offer the key.** [keys.json](keys.json) holds `"cmd-shift-a": "mod.open:automation"` under `global`, which opens the same view as a dialog. Ask the person before merging it into `~/.config/herdr-app/keys.json`, and check first that `cmd-shift-a` is not taken.
-5. **Check.** Run `herdr-app check ~/.config/herdr-app/mods/automation`, then `herdr-app status` and look for errors from the layout or the mod.
+4. **Add the engine block**, so Automations fire from the moment Herdr opens. Herdr starts a mod copy only once it has shown, and the panel is usually hidden behind its button. Put this block where it is always shown, for example at the end of the column that holds the terminals; it draws nothing:
 
-The engine runs only while the `automation` block is in the layout Herdr shows. The block may be hidden behind its button; a copy in a layout that is not shown, or a mod that is only installed, fires nothing. With the dialog open, that copy runs it too.
+   ```json
+   { "id": "automation-engine", "type": "block", "content": { "mod": "automation", "props": { "part": "engine" } }, "size": { "px": 0 } }
+   ```
+
+5. **Offer the key.** [keys.json](keys.json) holds `"cmd-shift-a": "mod.open:automation"` under `global`, which opens the same view as a dialog. Ask the person before merging it into `~/.config/herdr-app/keys.json`, and check first that `cmd-shift-a` is not taken.
+6. **Check.** Run `herdr-app check ~/.config/herdr-app/mods/automation`, then `herdr-app status` and look for errors from the layout or the mod.
+
+The engine runs in every copy that has started except the dialog's, and one of them at a time fires Runs. Without the engine block, nothing fires until the panel has been opened once after Herdr starts. A copy in a layout that is not shown, or a mod that is only installed, fires nothing.
 
 Do not create Automations for the person unless they ask. They live in `~/.config/herdr-app/data/automation/automations.json`, which updates of the mod never touch.
 
