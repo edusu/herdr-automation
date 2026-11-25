@@ -200,7 +200,7 @@ export const event = (run, at) => {
 export const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "automation";
 
 /**
- * Starts a Run of `automation` set off by `trigger` ("schedule", "catch-up", "manual", or the
+ * Starts a Run of `automation` set off by `trigger` ("schedule", "catch-up", "interval", "manual", or the
  * words of an agent-status or git firing), for the time `due`: Check, pre-script, workspace,
  * then the main step in a tab. `fired.folder` (the agent's folder) replaces the Automation's
  * folder; `fired.commit` (a git firing) is {commit} and a worktree's base. A previous
@@ -336,7 +336,11 @@ export async function finishRun(ctx, run, change) {
     if (tail) await store.writeRunFile(run.id, "tail.txt", tail.split("\n").slice(-TAIL_LINES - (tail.endsWith("\n") ? 1 : 0)).join("\n")).catch(() => {});
   }
   let mine = false;
-  const setLast = (s, value) => ({ ...s, last: { ...s.last, [run.automation]: value } });
+  // A skipped Run did no work, so an interval Trigger does not count from it.
+  const setLast = (s, value) => ({
+    ...s, last: { ...s.last, [run.automation]: value },
+    ...(value.status === "skipped" ? {} : { ran: { ...s.ran, [run.automation]: value.ended } }),
+  });
   await store.updateState((s) => {
     mine = Boolean(s.runs[run.id]);
     if (!mine) return s;

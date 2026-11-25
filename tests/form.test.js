@@ -15,6 +15,7 @@ test("the form's Trigger for each preset", () => {
   assert.deepEqual(formTrigger(form({ preset: "weekdays" })), { type: "schedule", preset: "weekdays", at: "09:30", days: [1, 5] });
   assert.deepEqual(formTrigger(form({ preset: "cron" })), { type: "schedule", preset: "cron", cron: "0 9 * * 1-5" });
   assert.deepEqual(formTrigger(form({ preset: "manual" })), { type: "manual" });
+  assert.deepEqual(formTrigger(form({ preset: "interval", interval: input(" 24h ") })), { type: "interval", every: "24h" });
   assert.deepEqual(formTrigger(form({ preset: "agent", inFolder: true, app: input(" codex ") })), { type: "agent", status: "done", inFolder: true, app: "codex" });
   assert.deepEqual(formTrigger(form({ preset: "git", gitSource: "remote" })), { type: "git", source: "remote", branch: "origin/main" });
   assert.equal(formTrigger(form({ preset: "git" })).branch, undefined);

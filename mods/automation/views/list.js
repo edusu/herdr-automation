@@ -23,7 +23,7 @@ export function list(m, t) {
     return v_flex().p(14).gap(6).child(note(t, "No Automations yet. Press + to make one."));
   return v_flex().px(4).py(4).gap(1).children(m.doc.automations.map((a) => {
     const going = m.going(a.id), last = m.state.last[a.id], tab = m.state.tabs[a.id];
-    const next = a.enabled === false || m.doc.paused ? null : m.next(a.trigger);
+    const next = a.enabled === false || m.doc.paused ? null : m.next(a);
     const status = going?.status ?? last?.status;
     const parts = [describe(a.trigger), next ? `next ${when(next, now)}` : a.enabled === false ? "off" : null].filter(Boolean);
     return h_flex().id(`row-${a.id}`).px(6).py(6).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))

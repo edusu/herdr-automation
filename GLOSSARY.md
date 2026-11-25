@@ -9,7 +9,7 @@ A saved definition of work to do: an agent prompt or a script, the folder it app
 _Avoid_: Schedule, job, task
 
 **Trigger**:
-The condition that sets off an Automation: a time, a manual request, an agent changing status, or a git change.
+The condition that sets off an Automation: a time, an interval since the last Run, a manual request, an agent changing status, or a git change.
 _Avoid_: Event, hook
 
 **Run**:

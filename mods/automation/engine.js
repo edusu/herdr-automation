@@ -1,10 +1,10 @@
-// The tick: leader lease, Runs going, due schedule Triggers, Catch-up, Missed, agent-status and
+// The tick: leader lease, Runs going, due schedule Triggers, Catch-up, Missed, interval, agent-status and
 // git Triggers, pauses and the purge of old worktrees. Starting and ending a Run (scripts, git,
 // tabs) go on beside the tick, so one slow step never holds the others or the lease.
 // The engine keeps nothing that matters in memory: Runs going and the last instant checked
 // per Automation are in state.json, so the next engine after a reload carries on.
-import { dueBetween, defaultCatchUp, durationMs } from "./cron.js";
-import { startRun, finishRun, updateRun, observe, newRunId, event, toast, ms, ENDED, STARTING_MS } from "./runs.js";
+import { dueBetween, defaultCatchUp, durationMs, intervalDue } from "./cron.js";
+import { startRun, finishRun, updateRun, observe, goingRun, newRunId, event, toast, ms, ENDED, STARTING_MS } from "./runs.js";
 import { dayKey } from "./store.js";
 import { inspectWorktree, removeWorktree } from "./shell.js";
 import { agentFirings, gitHead, gitFiring } from "./triggers.js";
@@ -39,6 +39,8 @@ export function decide({ count, latest, from, now, catchUp, paused }) {
   return { fire, missed: gap || !fire ? count - (fire ? 1 : 0) : 0, skipped: 0 };
 }
 
+/** How soon an interval Trigger that is still due (its Check said no) starts again, when its interval is longer. */
+export const INTERVAL_RETRY_MS = 5 * 60000;
 /** How often the tick looks for worktrees to purge. */
 export const PURGE_MS = 10 * 60000;
 /** How often a local git Trigger looks at its checkout. */
@@ -107,7 +109,7 @@ export async function purgeOld(ctx) {
  */
 export function createEngine({ store, host, lease, id, settings, now = Date.now }) {
   const ctx = { store, host, now, get settings() { return settings(); } };
-  const gone = new Map(), polled = new Map();
+  const gone = new Map(), polled = new Map(), tried = new Map();
   // Work going on beside the tick, by key: one start per firing, one end per Run, one git look
   // per Automation, the purge. A failure is reported by the next tick.
   const work = new Map();
@@ -180,6 +182,20 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
       if (d.skipped) await record(a, "skipped", "paused", d.skipped, latest);
       if (d.missed) await record(a, "missed", d.missed > 1 ? `${d.missed} times passed while Herdr was closed or the computer slept` : "Passed while Herdr was closed or the computer slept", d.missed, latest);
       if (d.fire) start(a, d.fire, latest);
+    }
+  }
+
+  // An interval Trigger is due once its `every` has passed since the Automation's last Run that
+  // was not skipped ended, and at once when it never ran. Nothing piles up while Herdr is closed
+  // or the Automation is paused, so nothing is Missed or skipped for it.
+  function fireIntervals(doc, state) {
+    for (const a of doc.automations) {
+      if (a.trigger.type !== "interval" || paused(doc, a) || goingRun(state, a.id)) continue;
+      const t = now();
+      if (t < intervalDue(a.trigger, state.ran[a.id])) continue;
+      if (t - (tried.get(a.id) ?? -Infinity) < Math.min(durationMs(a.trigger.every), INTERVAL_RETRY_MS)) continue;
+      tried.set(a.id, t);
+      start(a, "interval");
     }
   }
 
@@ -257,6 +273,7 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
         await watchRuns(state, look);
         await takeRequests(doc, state);
         await fireDue(doc, state);
+        fireIntervals(doc, state);
         await fireAgents(doc, look);
         fireGit(doc);
         if (now() - purged >= PURGE_MS) {

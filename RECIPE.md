@@ -43,7 +43,7 @@ Do not create Automations for the person unless they ask. They live in `~/.confi
 ## How it behaves
 
 - Every copy ticks every 5 seconds with `cx.timer.every`; `init` returns before the timer while `checking()`. Only the copy holding the lease `automation.leader` in Herdr's shared state fires and follows Runs.
-- A schedule is computed from the wall clock, so a time that passed while Herdr was closed starts late inside `catchUp`, or is recorded as Missed.
+- A schedule is computed from the wall clock, so a time that passed while Herdr was closed starts late inside `catchUp`, or is recorded as Missed. An interval Trigger counts from `ran` in `state.json`, the end of the Automation's last Run that was not skipped.
 - An agent Run in a repository works in a new worktree; the agent may write only `<run folder>/out/` (`{run_dir}`). The engine keeps the post-script and `requireResult` in `state.json`, never reading them back from a file the agent could change.
 - Every git call carries `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat -c protocol.ext.allow=never -c diff.external=`; credential helpers and ssh stay the person's.
 - Run now and Stop are written to `state.json` as requests; the leader's tick carries them out, since the dialog's copy is cancelled soon after the dialog closes.

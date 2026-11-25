@@ -10,7 +10,7 @@ export function detail(m, t) {
   if (!a) return v_flex().p(14).child(note(t, "This Automation is gone."));
   const now = Date.now(), going = m.going(a.id);
   const runs = latestRuns(m.history).filter((e) => e.automation === a.id);
-  const next = m.next(a.trigger);
+  const next = m.next(a);
   return v_flex().gap(6).p(10)
     .child(div().font_semibold().child(a.name))
     .child(note(t, [a.kind === "agent" ? `Agent ${a.agent || m.settings.agent}` : "Script", a.folder].join(" · ")))

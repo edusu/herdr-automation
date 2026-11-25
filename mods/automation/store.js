@@ -7,7 +7,7 @@ import { compile, durationMs, pad } from "./cron.js";
 export const SCRIPT_TIMEOUT_MAX = 600;
 
 const KINDS = ["agent", "script"];
-const TRIGGERS = ["schedule", "manual", "agent", "git"];
+const TRIGGERS = ["schedule", "interval", "manual", "agent", "git"];
 // "origin/main": a remote name, a slash, a branch; neither part may read as a git option.
 const REMOTE_BRANCH = /^[A-Za-z0-9._][A-Za-z0-9._-]*\/[A-Za-z0-9._][^\s~^:?*\[\\]*$/;
 const WORKSPACES = ["worktree", "folder"];
@@ -15,7 +15,7 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** The fields of an entry of automations.json; automations.schema.json names the same (tests/schema.test.js). */
 export const AUTOMATION_FIELDS = ["id", "name", "enabled", "kind", "folder", "trigger", "agent", "model", "args", "prompt", "command", "workspace", "base", "check", "pre", "post", "timeout", "catchUp", "requireResult"];
 /** The fields of each Trigger type. */
-export const TRIGGER_FIELDS = { manual: ["type"], schedule: ["type", "preset", "minutes", "at", "days", "cron"], agent: ["type", "status", "inFolder", "app"], git: ["type", "source", "branch"] };
+export const TRIGGER_FIELDS = { manual: ["type"], interval: ["type", "every"], schedule: ["type", "preset", "minutes", "at", "days", "cron"], agent: ["type", "status", "inFolder", "app"], git: ["type", "source", "branch"] };
 /** The fields of a Check, pre- or post-script. */
 export const SCRIPT_FIELDS = ["file", "inline", "timeout"];
 /** The optional scripts of an Automation, in pipeline order. */
@@ -25,7 +25,7 @@ export const AGENT_STATUSES = ["done", "blocked"];
 // A misspelt optional field would otherwise be ignored without a word.
 const unknown = (o, known) => Object.keys(o).find((k) => !known.includes(k));
 /** state.json when it is missing. */
-export const EMPTY_STATE = { checked: {}, runs: {}, last: {}, tabs: {}, worktrees: {}, commits: {}, requests: {} };
+export const EMPTY_STATE = { checked: {}, runs: {}, last: {}, ran: {}, tabs: {}, worktrees: {}, commits: {}, requests: {} };
 const DAY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
 /** Local "YYYY-MM-DD" of instant `t`. */
 export const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
@@ -61,6 +61,8 @@ export function automationError(a) {
   if (a.trigger.type === "schedule") {
     try { compile(a.trigger); } catch (e) { return `trigger: ${e.message}`; }
   }
+  if (a.trigger.type === "interval" && !(typeof a.trigger.every === "string" && durationMs(a.trigger.every) >= 60000))
+    return 'trigger every must be a duration of a minute or more, such as "24h"';
   if (a.trigger.type === "agent") {
     if (!AGENT_STATUSES.includes(a.trigger.status)) return 'trigger status must be "done" or "blocked"';
     if (!optional(a.trigger.inFolder, (v) => typeof v === "boolean")) return "trigger inFolder must be true or false";
@@ -166,9 +168,9 @@ export function store(root, io) {
     /** Rewrites automations.json as `fn({paused, automations})`, where automations are the raw entries, bad ones too. */
     updateAutomations: (fn) => update(files.automations, doc, fn),
     /**
-     * state.json: `{checked: {id: ms}, runs: {runId: run}, last: {id: run}, tabs: {id: {space, tab, terminal, run}},
+     * state.json: `{checked: {id: ms}, runs: {runId: run}, last: {id: run}, ran: {id: ms}, tabs: {id: {space, tab, terminal, run}},
      * worktrees: {runId: worktree}, commits: {id: {commit, branch, error}}, requests: {requestId: request}}`; empty
-     * when missing. `tabs` is each Automation's live tab, `commits` the last commit a git Trigger saw, `requests`
+     * when missing. `ran` is when each Automation's last Run that was not skipped ended, `tabs` is each Automation's live tab, `commits` the last commit a git Trigger saw, `requests`
      * the Run now and Stop that copies of the mod hand to the leader.
      */
     readState: async () => state(json(await io.readTextFile(files.state)).value),
@@ -219,7 +221,7 @@ export function store(root, io) {
     async deleteAutomation(id) {
       await update(files.automations, doc, (d) => ({ ...d, automations: d.automations.filter((x) => x?.id !== id) }));
       const drop = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => k !== id));
-      await update(files.state, state, (s) => ({ ...s, checked: drop(s.checked), last: drop(s.last), tabs: drop(s.tabs), commits: drop(s.commits) }));
+      await update(files.state, state, (s) => ({ ...s, checked: drop(s.checked), last: drop(s.last), ran: drop(s.ran), tabs: drop(s.tabs), commits: drop(s.commits) }));
     },
   };
 }

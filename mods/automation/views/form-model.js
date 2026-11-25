@@ -9,6 +9,7 @@ export function formTrigger(f) {
   if (p === "manual") return { type: "manual" };
   if (p === "agent") return { type: "agent", status: f.agentStatus, inFolder: f.inFolder || undefined, app: f.app.value().trim() || undefined };
   if (p === "git") return { type: "git", source: f.gitSource, branch: f.gitSource === "remote" ? f.gitBranch.value().trim() : undefined };
+  if (p === "interval") return { type: "interval", every: f.interval.value().trim() };
   if (p === "every") return { type: "schedule", preset: p, minutes: Number(f.minutes.value().trim()) };
   if (p === "daily") return { type: "schedule", preset: p, at: f.at.value().trim() };
   if (p === "weekdays") return { type: "schedule", preset: p, at: f.at.value().trim(), days: WEEK.filter((d) => f.days.includes(d)) };

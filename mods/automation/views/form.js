@@ -6,7 +6,7 @@ import { VARIABLES, defaultWorkspace } from "../runs.js";
 import { TEXT, button, chip, toggle, label, note } from "./ui.js";
 import { WEEK, formTrigger } from "./form-model.js";
 
-const PRESETS = [["manual", "Manual"], ["every", "Every N min"], ["daily", "Daily"], ["weekdays", "Weekdays"], ["cron", "Cron"], ["agent", "Agent status"], ["git", "Git"]];
+const PRESETS = [["manual", "Manual"], ["every", "Every N min"], ["interval", "Since last Run"], ["daily", "Daily"], ["weekdays", "Weekdays"], ["cron", "Cron"], ["agent", "Agent status"], ["git", "Git"]];
 const STEP_TITLES = [["check", "Check (exit 0 goes on, else the Run is skipped)"], ["pre", "Pre-script (its output is {pre})"], ["post", "Post-script (runs where the Run worked)"]];
 const VARIABLES_NOTE = `Variables: ${VARIABLES.map((v) => `{${v}}`).join(" ")}. In shell text, leave them unquoted.`;
 
@@ -18,6 +18,7 @@ export function form(m, t) {
   const trigger = formTrigger(f);
   let preview;
   if (trigger.type === "manual") preview = note(t, "Runs only with Run now.");
+  else if (trigger.type === "interval") preview = note(t, "Runs at once the first time, then when this long has passed since its last Run ended. Run now counts; a Run its Check skipped does not.");
   else if (trigger.type === "agent") preview = note(t, "Agents started by an Automation never fire one. The Run works in the folder of the agent that fired it.");
   else if (trigger.type === "git") preview = note(t, "The first look only records the commit; a branch switch does not fire.");
   else {
@@ -67,6 +68,7 @@ export function form(m, t) {
     .child(label(t, "Trigger"))
     .child(row(...PRESETS.map(([p, name]) => chip(t, `preset-${p}`, name, f.preset === p, () => { f.preset = p; }))))
     .when(f.preset === "every", (el) => el.child(row(div().child("Every"), div().w(70).child(input(f.minutes)), div().child("minutes"))))
+    .when(f.preset === "interval", (el) => el.child(row(div().child("When"), div().w(70).child(input(f.interval)), div().child("has passed since the last Run (90m, 24h, 7d)"))))
     .when(daily, (el) => el.child(row(div().child("At"), div().w(80).child(input(f.at)))))
     .when(f.preset === "weekdays", (el) => el.child(row(...WEEK.map((d) => chip(t, `day-${d}`, DAY_NAMES[d], f.days.includes(d),
       () => { f.days = f.days.includes(d) ? f.days.filter((x) => x !== d) : [...f.days, d]; })))))

@@ -7,7 +7,7 @@ import { theme, appHome, checking, props } from "herdr";
 import { loadSettings } from "./settings.js";
 import { store, automationError, dayKey, EMPTY_STATE, STEP_KEYS } from "./store.js";
 import { createEngine } from "./engine.js";
-import { nextTimes } from "./cron.js";
+import { nextTimes, intervalDue } from "./cron.js";
 import { goingRun, ms, slug, DEFAULT_SETTINGS } from "./runs.js";
 import { host, io, lease } from "./host.js";
 import { repoRoot } from "./shell.js";
@@ -109,8 +109,10 @@ export default class Automation extends View {
     return changed;
   }
 
-  /** The next time of `trigger`, worked out once a minute. */
-  next(trigger) {
+  /** The next time of Automation `a`'s Trigger, a schedule's worked out once a minute; an interval's is known only between Runs. */
+  next(a) {
+    const trigger = a.trigger;
+    if (trigger.type === "interval") return this.going(a.id) ? null : Math.max(Date.now(), intervalDue(trigger, this.state.ran[a.id]));
     const now = Date.now(), minute = Math.floor(now / 60000), c = this.nextCache;
     if (c.minute !== minute) Object.assign(c, { minute, times: new WeakMap() });
     if (!c.times.has(trigger)) c.times.set(trigger, nextTimes(trigger, now, 1)[0] ?? null);
@@ -202,6 +204,7 @@ export default class Automation extends View {
       prompt: TextareaState.new({ value: a?.prompt ?? "", placeholder: "The first message for the agent" }),
       command: TextareaState.new({ value: a?.command ?? "", placeholder: "make test" }),
       minutes: text(tr.minutes ? String(tr.minutes) : "15", "15"),
+      interval: text(tr.every ?? "24h", "24h"),
       at: text(tr.at ?? "09:00", "09:00"),
       cron: text(tr.cron ?? "0 9 * * 1-5", "0 9 * * 1-5"),
       agentStatus: tr.status ?? "done", inFolder: tr.inFolder === true,

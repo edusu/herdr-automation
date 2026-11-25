@@ -23,6 +23,8 @@ test("a field neither knows is reported", () => {
   const a = { id: "a", name: "A", kind: "script", folder: "/tmp", command: "true", trigger: { type: "manual" } };
   assert.match(automationError({ ...a, promt: "x" }), /unknown field "promt"/);
   assert.match(automationError({ ...a, trigger: { type: "manual", at: "09:00" } }), /trigger has an unknown field "at"/);
+  assert.equal(automationError({ ...a, trigger: { type: "interval", every: "7d" } }), null);
+  for (const every of ["30s", "soon", 3600000, undefined]) assert.match(automationError({ ...a, trigger: { type: "interval", every } }), /a minute or more/);
   assert.match(automationError({ ...a, post: { inline: "true", timout: 5 } }), /post has an unknown field "timout"/);
 });
 

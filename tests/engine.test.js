@@ -72,6 +72,40 @@ test("a time that comes due while the last Run goes on is skipped (overlap)", as
   assert.equal((await s.readHistory())[0].reason, "overlap");
 });
 
+test("an interval Trigger: at once, then its interval after the last Run ended; a skipped Run does not count", async (t) => {
+  const hourly = { id: "i", name: "Hourly", kind: "script", folder: "/tmp", command: "true", trigger: { type: "interval", every: "1h" } };
+  const { s, host, now, engine } = await setup(t, [hourly], at(25, 9));
+  await tick(engine);
+  assert.equal(host.opened.length, 1, "never ran: due at once");
+  const [run] = Object.values((await s.readState()).runs);
+  now.set(at(25, 9, 5));
+  await s.writeRunFile(run.id, "exit", "0");
+  await tick(engine);
+  assert.equal((await s.readState()).ran.i, at(25, 9, 5));
+  now.set(at(25, 10, 4));
+  await tick(engine);
+  assert.equal(host.opened.length, 1, "counted from the end, not the start");
+  // Herdr closed for two days: one Run, nothing Missed.
+  now.set(at(27, 8));
+  await tick(engine);
+  assert.equal(host.opened.length, 2);
+  await engine.stop(Object.keys((await s.readState()).runs)[0]);
+  await s.updateAutomations(() => ({ paused: false, automations: [{ ...hourly, check: { inline: "exit 1" } }] }));
+  now.set(at(27, 9, 1));
+  await tick(engine);
+  now.add(MIN);
+  await tick(engine);
+  now.add(5 * MIN);
+  await tick(engine);
+  assert.equal(host.opened.length, 2);
+  assert.equal((await s.readState()).ran.i, at(27, 8), "a Run its Check skipped leaves it due");
+  assert.deepEqual(await statuses(s), ["running", "ok", "running", "stopped", "skipped", "skipped"]);
+  await s.updateAutomations(() => ({ paused: true, automations: [hourly] }));
+  now.add(10 * MIN);
+  await tick(engine);
+  assert.equal((await statuses(s)).length, 6, "paused: nothing starts and nothing is recorded");
+});
+
 test("paused, per Automation or for everything: skipped and never replayed", async (t) => {
   const { s, host, now, engine } = await setup(t, [{ ...every, enabled: false }], at(25, 9, 14));
   await tick(engine);

@@ -70,11 +70,12 @@ A script: the tests every night at 02:00, with a line per Run in a log file.
 Each Automation has one Trigger, and Run now.
 
 - **Schedule**: `{"type": "schedule", "preset": "every", "minutes": 15}` (counted from midnight), `"daily"` with `"at": "09:00"`, `"weekdays"` with `"at"` and `"days"` (0 is Sunday), or `"cron"` with `"cron": "0 9 * * 1-5"` (minute hour day month weekday; `*`, numbers, ranges, lists, steps). Always the computer's local time. The form shows the next three times.
+- **Interval**: `{"type": "interval", "every": "24h"}` (`"90m"`, `"7d"`; a minute or more) starts a Run once that long has passed since the Automation's last Run ended, and at once when it never ran. Any Run counts, Run now too, except one its Check skipped; then the Check is asked again every 5 minutes. After Herdr was closed it runs once and counts again from there: nothing is Missed, and `catchUp` does not apply.
 - **Manual**: `{"type": "manual"}`. Only Run now.
 - **Agent status**: `{"type": "agent", "status": "done"}` or `"blocked"` (needs you). `"inFolder": true` keeps only agents inside the Automation's folder; `"app": "claude"` keeps only that agent app. The Run works in the folder of the agent that fired it. An agent an Automation started (its terminal carries the Run label) never fires one, so two Automations cannot start each other.
 - **Git**: `{"type": "git", "source": "local"}` fires on a new commit on the current branch of the folder. `{"type": "git", "source": "remote", "branch": "origin/main"}` fires on new commits of that remote branch, read with `git ls-remote` every `gitPollInterval`; a local one looks every 30 seconds. The first look only records the commit. A branch switch does not fire. A worktree Run starts from the commit that fired it.
 
-A time that passed while Herdr was closed or the computer slept starts once, late, inside `catchUp`; otherwise it is recorded as Missed. What comes due while paused is recorded as skipped and is not replayed.
+A time that passed while Herdr was closed or the computer slept starts once, late, inside `catchUp`; otherwise it is recorded as Missed. What comes due while paused is recorded as skipped and is not replayed; a paused interval Trigger records nothing and runs when it is on again.
 
 ## A Run
 

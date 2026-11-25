@@ -195,6 +195,25 @@
           "additionalProperties": false,
           "required": [
             "type",
+            "every"
+          ],
+          "description": "Once this long has passed since the Automation's last Run ended; at once when it never ran.",
+          "properties": {
+            "type": {
+              "const": "interval"
+            },
+            "every": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d+)?(s|m|h|d)$",
+              "description": "A duration of a minute or more, such as \"90m\", \"24h\" or \"7d\"."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
             "preset"
           ],
           "description": "A time, in the computer's local time.",
