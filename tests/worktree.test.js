@@ -5,7 +5,8 @@ import { execFileSync } from "node:child_process";
 import { startRun, finishRun } from "../mods/automation/runs.js";
 import { purgeWorktrees, purgeDecision } from "../mods/automation/engine.js";
 import { store } from "../mods/automation/store.js";
-import { io, fakeHost, clock, git, commit, gitRepo, SETTINGS } from "./helpers.js";
+import { inspectWorktree } from "../mods/automation/shell.js";
+import { io, exec, fakeHost, clock, git, commit, gitRepo, SETTINGS } from "./helpers.js";
 
 const DAY = 24 * 60 * 60000;
 const agent = (folder, more) => ({ id: "w", name: "Nightly Review", kind: "agent", folder, prompt: "Review {branch} at {commit}", trigger: { type: "manual" }, ...more });
@@ -87,6 +88,18 @@ test("the purge keeps young and dirty worktrees, removes old clean ones and dele
   const left = branches(repo);
   assert.ok(!left.includes(clean.branch));
   assert.ok(left.includes(worked.branch) && left.includes(dirty.branch));
+});
+
+test("inspecting a worktree runs no program its git config names", async (t) => {
+  const { root, repo, first } = await setup(t);
+  const hook = `${root}/fsmonitor.sh`;
+  await fs.writeFile(hook, `#!/bin/sh\ntouch '${root}/marker'\n`, { mode: 0o755 });
+  git(repo, "config", "core.fsmonitor", hook);
+  git(repo, "config", "core.hooksPath", root);
+  await fs.writeFile(`${repo}/new.txt`, "x");
+  const seen = await inspectWorktree(exec, { repo, path: repo, branch: "main", start: first });
+  assert.equal(seen.dirty, true);
+  assert.ok(!(await exists(`${root}/marker`)));
 });
 
 test("the purge decision", () => {

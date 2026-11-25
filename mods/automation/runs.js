@@ -17,6 +17,18 @@ export const STARTING_MS = 5 * 60000;
 
 export const isActive = (run) => ACTIVE.includes(run?.status);
 
+const FAILURES = ["failed", "timed out", "blocked"], SKIPS = ["skipped", "missed"];
+const LEVELS = { failures: FAILURES, "failures-and-skips": [...FAILURES, ...SKIPS], all: [...FAILURES, ...SKIPS, "ok", "stopped", "closed"], never: [] };
+/** Whether notification level `level` (the setting; unknown reads as "failures") posts a toast for a Run that became `status`. */
+export const notifies = (level, status) => (LEVELS[level] ?? LEVELS.failures).includes(status);
+
+const TOAST_LEVELS = { failed: "error", "timed out": "error", blocked: "warning", skipped: "warning", missed: "warning", ok: "success" };
+/** A toast for `run` becoming `status`, when the settings' level asks for one; a click goes to `terminal`. */
+export function toast({ host, settings }, run, status, reason, terminal = null) {
+  if (!notifies(settings.notifications, status)) return;
+  host.notify({ title: `${run.name}: ${status}`, body: reason ?? "", level: TOAST_LEVELS[status] ?? "info", terminal, blocked: status === "blocked" });
+}
+
 const pad = (n) => String(n).padStart(2, "0");
 /** "20261125-093000-k3f9": sortable, and safe as a folder name and a label value. */
 export function newRunId(now, random = Math.random) {
@@ -39,6 +51,8 @@ export const envName = (name) => `HERDR_AUTO_${name.toUpperCase()}`;
 /** The longest {pre} or {check} value passed on, so it fits in an argv. */
 export const VALUE_MAX = 64 * 1024;
 const RESULT_MAX = 8 * 1024;
+/** The result file, in the Run's out/ folder. */
+export const RESULT_FILE = "result.md";
 /** The timeout of a Check, pre- or post-script without one, in seconds. */
 const SCRIPT_TIMEOUT = 60;
 
@@ -160,14 +174,16 @@ export async function startRun(ctx, automation, trigger, due = null, fired = {})
   if (overlap) {
     const skipped = { ...run, status: "skipped", reason: "overlap", ended: now() };
     await store.appendHistory(event(skipped, now()));
+    toast(ctx, skipped, "skipped", "The previous Run is still going");
     return skipped;
   }
   let current = run;
   try {
     await store.writeRunFile(run.id, "automation.json", JSON.stringify(automation, null, 2));
-    const runDir = store.runDir(run.id);
+    const runDir = store.runDir(run.id), outDir = store.outDir(run.id);
+    await store.writeRunFile(run.id, `out/${RESULT_FILE}`, "");
     const folder = fired.folder ?? automation.folder;
-    const vars = { folder, trigger, date: dayKey(now()), run_dir: runDir, result_file: `${runDir}/result.md`, pre: "", check: "", commit: "", branch: "" };
+    const vars = { folder, trigger, date: dayKey(now()), run_dir: outDir, result_file: `${outDir}/${RESULT_FILE}`, pre: "", check: "", commit: "", branch: "" };
     const before = { cwd: folder, folder: automation.folder, vars };
     if (automation.check) {
       const r = await runStepScript(ctx, run, "check", automation.check, before);
@@ -197,7 +213,9 @@ export async function startRun(ctx, automation, trigger, due = null, fired = {})
     await host.label(opened.terminal, RUN_LABEL, run.id).catch(() => {});
     // {pre} and {check} stay in their files; the post-script reads them back.
     const { pre, check, ...kept } = vars;
-    const going = { ...current, ...opened, vars: kept, status: "running", deadline: now() + timeoutMs(automation, settings) };
+    // What the end of the Run decides on is kept here, never read back from a file an agent may write.
+    const going = { ...current, ...opened, vars: kept, status: "running", deadline: now() + timeoutMs(automation, settings),
+      home: automation.folder, post: automation.post, requireResult: automation.requireResult === true };
     let previous = null;
     await store.updateState((s) => {
       previous = s.last[automation.id] ?? null;
@@ -216,16 +234,15 @@ export async function startRun(ctx, automation, trigger, due = null, fired = {})
 // change to the ended Run, or null.
 async function afterMainStep(ctx, ended) {
   const { store } = ctx;
-  const definition = JSON.parse((await store.readRunFile(ended.id, "automation.json").catch(() => null)) ?? "{}");
-  const result = (await store.readRunFile(ended.id, "result.md").catch(() => null)) ?? "";
+  const result = (await store.readRunFile(ended.id, `out/${RESULT_FILE}`).catch(() => null)) ?? "";
   let change = null;
-  if (definition.requireResult && ended.status === "ok" && !result.trim()) change = { status: "failed", reason: "The Run ended without a result file" };
-  if (!definition.post) return change;
+  if (ended.requireResult && ended.status === "ok" && !result.trim()) change = { status: "failed", reason: "The Run ended without a result file" };
+  if (!ended.post) return change;
   const status = change?.status ?? ended.status, reason = change?.reason ?? ended.reason ?? "";
   const [pre, check] = await Promise.all(["pre", "check"].map((s) => store.readRunFile(ended.id, `${s}.txt`).catch(() => null)));
   const vars = { ...ended.vars, pre: (pre ?? "").replace(/\n+$/, "").slice(0, VALUE_MAX), check: (check ?? "").replace(/\n+$/, "").slice(0, VALUE_MAX) };
-  const r = await runStepScript(ctx, ended, "post", definition.post, {
-    cwd: ended.folder, folder: definition.folder, vars,
+  const r = await runStepScript(ctx, ended, "post", ended.post, {
+    cwd: ended.folder, folder: ended.home, vars,
     extra: {
       HERDR_AUTO_STATUS: status, HERDR_AUTO_REASON: reason, HERDR_AUTO_RESULT: result.slice(0, RESULT_MAX),
       HERDR_AUTO_TAIL_FILE: `${store.runDir(ended.id)}/tail.txt`, HERDR_AUTO_TERMINAL: ended.terminal ?? "",
@@ -239,7 +256,7 @@ async function afterMainStep(ctx, ended) {
  * Ends a Run with `change` (`{status, reason}`): saves its terminal's tail, moves it from
  * `runs` to `last` in state.json, ends a stopped Run's terminal, and when the main step ran,
  * applies requireResult and runs the post-script; then writes its history line and posts a
- * toast on failure. Resolves the ended Run, or null when another copy ended it first.
+ * toast when the notification level asks for one. Resolves the ended Run, or null when another copy ended it first.
  */
 export async function finishRun(ctx, run, change) {
   const { host, store, now } = ctx;
@@ -273,18 +290,16 @@ export async function finishRun(ctx, run, change) {
     }
   }
   await store.appendHistory(event(ended, now()));
-  if (ended.status === "failed" || ended.status === "timed out")
-    host.notify({ title: `${run.name}: ${ended.status}`, body: ended.reason ?? "", level: "error", terminal: host.alive(run.terminal) ? run.terminal : null });
+  toast(ctx, run, ended.status, ended.reason, host.alive(run.terminal) ? run.terminal : null);
   return ended;
 }
 
 /** Records a change of a going Run that does not end it (blocked, working again, first seen). */
 export async function updateRun(ctx, run, change) {
-  const { host, store, now } = ctx;
+  const { store, now } = ctx;
   const next = { ...run, ...change };
   await store.updateState((s) => (s.runs[run.id] ? { ...s, runs: { ...s.runs, [run.id]: next } } : s));
   if (change.status && change.status !== run.status) await store.appendHistory(event(next, now()));
-  if (change.status === "blocked" && run.status !== "blocked")
-    host.notify({ title: `${run.name}: blocked`, body: "The agent needs you.", level: "warning", terminal: run.terminal, blocked: true });
+  if (change.status === "blocked" && run.status !== "blocked") toast(ctx, run, "blocked", "The agent needs you.", run.terminal);
   return next;
 }

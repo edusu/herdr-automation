@@ -31,6 +31,15 @@ test("a bad entry is reported and the valid ones still load", async (t) => {
   assert.equal(JSON.parse(await io.readTextFile(s.files.automations)).automations.length, 4);
 });
 
+test("a save keeps the file's other top-level keys, such as $schema", async (t) => {
+  const root = await tempRoot();
+  t.after(() => removeRoot(root));
+  const s = store(root, io);
+  await io.writeTextFile(s.files.automations, JSON.stringify({ $schema: "x.json", automations: [good] }), null);
+  await s.updateAutomations((d) => ({ ...d, paused: true }));
+  assert.equal(JSON.parse(await io.readTextFile(s.files.automations)).$schema, "x.json");
+});
+
 test("a file that is not JSON is reported, not thrown", async (t) => {
   const root = await tempRoot();
   t.after(() => removeRoot(root));

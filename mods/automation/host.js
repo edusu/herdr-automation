@@ -8,7 +8,9 @@ export const io = {
   readTextFile,
   writeTextFile,
   mkdir: (path, options) => fs.mkdir(path, options),
-  readdir: (path) => fs.readdir(path),
+  readdir: (path, options) => fs.readdir(path, options),
+  unlink: (path) => fs.unlink(path),
+  rmdir: (path) => fs.rmdir(path),
 };
 
 const LEASE_KEY = "automation.leader";

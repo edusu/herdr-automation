@@ -28,7 +28,10 @@ export function runScript(exec, script, { cwd, env, timeout }) {
   return exec("env", [...envArgs(env), ...argv], { cwd, timeout }).catch(failed);
 }
 
-const git = (exec, cwd, args, timeout = 60000) => exec("git", args, { cwd, timeout }).catch(failed);
+// A Run's worktree, and the repository after an agent worked in it, may hold a config or hook
+// the agent planted; these keep git from running any program such config names.
+const SAFE = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat"];
+const git = (exec, cwd, args, timeout = 60000) => exec("git", [...SAFE, ...args], { cwd, timeout }).catch(failed);
 const output = (r) => (r.stderr || r.stdout).trim();
 
 /** The top folder of the repository `folder` is in, or null when it is not in one. */

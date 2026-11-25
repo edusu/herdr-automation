@@ -6,7 +6,8 @@ import { v_flex, h_flex, InputState, TextareaState } from "gpui-base";
 import { theme, appHome, checking, props, closeOverlay, pickFolder, settings as appSettings } from "herdr";
 import { loadSettings } from "./settings.js";
 import { store, automationError } from "./store.js";
-import { createEngine } from "./engine.js";
+import { createEngine, DEFAULT_SETTINGS } from "./engine.js";
+import { durationMs } from "./cron.js";
 import { isActive } from "./runs.js";
 import { host, io, lease } from "./host.js";
 import { repoRoot } from "./shell.js";
@@ -15,23 +16,13 @@ import { header, list } from "./views/list.js";
 import { detail } from "./views/detail.js";
 import { form, formTrigger } from "./views/form.js";
 
-const DEFAULT_SETTINGS = {
-  agent: "claude",
-  space: "Automations",
-  worktreeRetention: "7d",
-  historyRetention: "30d",
-  notifications: "failures",
-  gitPollInterval: "5m",
-  agentTimeout: "60m",
-  scriptTimeout: "10m",
-};
 const TICK_MS = 5000;
-const HISTORY_DAYS = 30;
+const DAY = 24 * 60 * 60000;
 const STEPS = ["check", "pre", "post"];
 const FIELDS = ["name", "folder", "model", "args", "prompt", "command", "minutes", "at", "cron", "app", "gitBranch", "timeout", "catchUp", "base", ...STEPS.flatMap((k) => [k, `${k}Timeout`])];
 // The run files the panel shows for an ended Run, in pipeline order.
 const OUTPUTS = [["Check", "check.txt"], ["Check (stderr)", "check.err.txt"], ["Pre-script", "pre.txt"], ["Pre-script (stderr)", "pre.err.txt"],
-  ["Terminal (last 200 lines)", "tail.txt"], ["Post-script", "post.txt"], ["Post-script (stderr)", "post.err.txt"], ["Result file", "result.md"]];
+  ["Terminal (last 200 lines)", "tail.txt"], ["Post-script", "post.txt"], ["Post-script (stderr)", "post.err.txt"], ["Result file", "out/result.md"]];
 
 const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "automation";
 const cleaned = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
@@ -79,7 +70,7 @@ export default class Automation extends View {
     try {
       this.doc = await this.store.readAutomations();
       this.state = await this.store.readState();
-      if (this.screen.name === "detail") this.history = await this.store.readHistory(HISTORY_DAYS);
+      if (this.screen.name === "detail") this.history = await this.store.readHistory(Math.ceil((durationMs(this.settings.historyRetention) ?? 30 * DAY) / DAY));
     } catch (e) {
       this.error = `Cannot read the data folder: ${e?.message ?? e}`;
     }
@@ -125,7 +116,7 @@ export default class Automation extends View {
   remove(a, cx) {
     this.ask = null;
     this.show({ name: "list" });
-    this.act(cx, () => this.store.updateAutomations((d) => ({ ...d, automations: d.automations.filter((x) => x?.id !== a.id) })));
+    this.act(cx, () => this.store.deleteAutomation(a.id));
   }
 
   /** A history row: its tab while it is open, else what the Run saved and its worktree. */

@@ -24,7 +24,9 @@ export const io = {
     return done;
   },
   mkdir: (p, o) => fs.mkdir(p, o),
-  readdir: (p) => fs.readdir(p),
+  readdir: (p, o) => fs.readdir(p, o),
+  unlink: (p) => fs.unlink(p),
+  rmdir: (p) => fs.rmdir(p),
 };
 
 /** Herdr's exec contract on node: resolves {code, stdout, stderr}, rejects when it cannot start. */

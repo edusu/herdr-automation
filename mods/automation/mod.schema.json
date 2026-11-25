@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Automations mod.json",
+  "description": "What Herdr reads from the Automations mod's mod.json, and the settings it takes. The Automations themselves live in ~/.config/herdr-app/data/automation/automations.json.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "This file's schema, for editors."
+    },
+    "version": {
+      "type": "string",
+      "description": "The mod's version."
+    },
+    "title": {
+      "type": "string",
+      "description": "The mod's name, as Herdr shows it."
+    },
+    "place": {
+      "enum": [
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "none"
+      ],
+      "description": "Where Herdr first docks the mod. \"none\": only where a layout or another mod puts it."
+    },
+    "size": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Its first size, in pixels."
+    },
+    "focusable": {
+      "type": "boolean",
+      "description": "Lets pane.go give a shown copy the keyboard."
+    },
+    "overlay": {
+      "type": "object",
+      "description": "How mod.open shows it.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "dialog",
+            "popup",
+            "window"
+          ]
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "description": "Your changes. A setting left out uses its default.",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "title": "Default agent",
+          "description": "The agent of a new Automation: a program key from Herdr's known agents, such as claude or codex.",
+          "type": "string",
+          "default": "claude"
+        },
+        "space": {
+          "title": "Space",
+          "description": "The space that holds the Runs' tabs. It is made when missing.",
+          "type": "string",
+          "default": "Automations"
+        },
+        "worktreeRetention": {
+          "title": "Worktree retention",
+          "description": "How long a Run's worktree is kept before a clean one is removed, such as \"7d\" or \"12h\".",
+          "type": "string",
+          "pattern": "^\\s*\\d+(\\.\\d+)?\\s*(s|m|h|d)\\s*$",
+          "default": "7d"
+        },
+        "historyRetention": {
+          "title": "History retention",
+          "description": "How long history days and run folders are kept, such as \"30d\".",
+          "type": "string",
+          "pattern": "^\\s*\\d+(\\.\\d+)?\\s*(s|m|h|d)\\s*$",
+          "default": "30d"
+        },
+        "notifications": {
+          "title": "Notifications",
+          "description": "Which Runs post a toast: failures (failed, timed out, blocked), failures and skips (also skipped and missed), all, or never.",
+          "type": "string",
+          "enum": [
+            "failures",
+            "failures-and-skips",
+            "all",
+            "never"
+          ],
+          "x-labels": {
+            "failures": "Failures",
+            "failures-and-skips": "Failures and skips",
+            "all": "All",
+            "never": "Never"
+          },
+          "default": "failures"
+        },
+        "gitPollInterval": {
+          "title": "Git poll interval",
+          "description": "How often a remote git Trigger reads its branch, such as \"5m\".",
+          "type": "string",
+          "pattern": "^\\s*\\d+(\\.\\d+)?\\s*(s|m|h|d)\\s*$",
+          "default": "5m"
+        },
+        "agentTimeout": {
+          "title": "Agent timeout",
+          "description": "The timeout of an agent Automation that sets none, such as \"60m\".",
+          "type": "string",
+          "pattern": "^\\s*\\d+(\\.\\d+)?\\s*(s|m|h|d)\\s*$",
+          "default": "60m"
+        },
+        "scriptTimeout": {
+          "title": "Script timeout",
+          "description": "The timeout of a script Automation that sets none, such as \"10m\".",
+          "type": "string",
+          "pattern": "^\\s*\\d+(\\.\\d+)?\\s*(s|m|h|d)\\s*$",
+          "default": "10m"
+        }
+      }
+    }
+  }
+}

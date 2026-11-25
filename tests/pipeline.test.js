@@ -65,7 +65,7 @@ test("requireResult fails an ok Run without a result file", async (t) => {
   const first = await startRun(ctx, a, "manual");
   assert.equal((await finishRun(ctx, first, { status: "ok" })).status, "failed");
   const second = await startRun(ctx, a, "manual");
-  await s.writeRunFile(second.id, "result.md", "Done.");
+  await s.writeRunFile(second.id, "out/result.md", "Done.");
   assert.equal((await finishRun(ctx, second, { status: "ok" })).status, "ok");
 });
 
@@ -73,15 +73,15 @@ test("variables reach prompts, commands and scripts literally", async (t) => {
   const { root, host, s, ctx } = await setup(t);
   const a = script(root, {
     pre: { inline: `printf '%s' ${q(NASTY)}` },
-    command: `printf '%s|%s|%s' {pre} {trigger} "$HERDR_AUTO_NAME" > {run_dir}/out`,
+    command: `printf '%s|%s|%s' {pre} {trigger} "$HERDR_AUTO_NAME" > {run_dir}/says`,
     post: { inline: `printf '%s|%s|%s' {pre} "$HERDR_AUTO_STATUS" "$HERDR_AUTO_RESULT" > ${q(`${root}/post`)}` },
   });
   const run = await startRun(ctx, a, "manual");
   const { argv } = host.opened[0];
   execFileSync(argv[0], argv.slice(1), { cwd: root });
-  assert.equal(await s.readRunFile(run.id, "out"), `${NASTY}|manual|Job`);
+  assert.equal(await s.readRunFile(run.id, "out/says"), `${NASTY}|manual|Job`);
   assert.equal(await s.readRunFile(run.id, "exit"), "0");
-  await s.writeRunFile(run.id, "result.md", "all good");
+  await s.writeRunFile(run.id, "out/result.md", "all good");
   await finishRun(ctx, run, { status: "ok" });
   assert.equal(await io.readTextFile(`${root}/post`), `${NASTY}|ok|all good`);
   assert.equal(await io.readTextFile(`${root}/pwned`), null);
@@ -105,7 +105,23 @@ test("scripts get the HERDR_AUTO_* environment", async (t) => {
   assert.deepEqual(Object.keys(env).sort(), names.map((n) => `HERDR_AUTO_${n}`).sort());
   assert.equal(env.HERDR_AUTO_CHECK, "yes");
   assert.equal(env.HERDR_AUTO_RUN_ID, run.id);
-  assert.equal(env.HERDR_AUTO_RESULT_FILE, `${s.runDir(run.id)}/result.md`);
+  assert.equal(env.HERDR_AUTO_RESULT_FILE, `${s.outDir(run.id)}/result.md`);
+});
+
+test("a file the agent may write cannot change the post-script or requireResult", async (t) => {
+  const { root, host, s, ctx } = await setup(t);
+  const a = { id: "g", name: "Agent", kind: "agent", folder: root, workspace: "folder", prompt: "Hi", trigger: { type: "manual" },
+    requireResult: true, post: { inline: `echo good > ${q(`${root}/post`)}` } };
+  const run = await startRun(ctx, a, "manual");
+  const out = `${s.runDir(run.id)}/out`;
+  assert.deepEqual(host.opened[0].argv, ["claude", "--add-dir", out]);
+  const evil = JSON.stringify({ ...a, requireResult: false, post: { inline: `touch ${q(`${root}/pwned`)}` } });
+  await io.writeTextFile(`${out}/automation.json`, evil, null);
+  await io.writeTextFile(`${s.runDir(run.id)}/automation.json`, evil, await io.readTextFile(`${s.runDir(run.id)}/automation.json`));
+  const ended = await finishRun(ctx, run, { status: "ok" });
+  assert.equal(ended.status, "failed");
+  assert.equal(await io.readTextFile(`${root}/post`), "good\n");
+  assert.equal(await io.readTextFile(`${root}/pwned`), null);
 });
 
 test("check, pre and post are validated", () => {

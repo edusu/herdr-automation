@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Automations",
+  "description": "~/.config/herdr-app/data/automation/automations.json, read by the Automations mod. The mod checks each entry itself: a bad one is reported in the panel and the others still run.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "This file's schema, for editors."
+    },
+    "paused": {
+      "type": "boolean",
+      "default": false,
+      "description": "Pauses every Automation. What comes due while paused is recorded as skipped."
+    },
+    "automations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/automation"
+      }
+    }
+  },
+  "$defs": {
+    "automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "folder",
+        "trigger"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "description": "Unique, stable id."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shown in the panel, the tab and toasts."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "false pauses this Automation."
+        },
+        "kind": {
+          "enum": [
+            "agent",
+            "script"
+          ],
+          "description": "agent: a prompt for a coding agent. script: a shell command."
+        },
+        "folder": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Absolute path where it applies; for a worktree Run, the repository."
+        },
+        "trigger": {
+          "$ref": "#/$defs/trigger"
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent kind: a key of Herdr's known agents. Default: the agent setting."
+        },
+        "model": {
+          "type": "string",
+          "description": "Agent kind: passed as --model."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Agent kind: extra arguments for the agent."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent kind, required: the first message, with {variables}."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Script kind, required: the shell command, with {variables}."
+        },
+        "workspace": {
+          "enum": [
+            "worktree",
+            "folder"
+          ],
+          "description": "worktree: a new git worktree per Run. folder: the folder as it is."
+        },
+        "base": {
+          "type": "string",
+          "pattern": "^[^-]",
+          "description": "Worktree only: the ref the worktree starts from. Default: the remote's default branch."
+        },
+        "check": {
+          "$ref": "#/$defs/script",
+          "description": "Runs first; any exit code but 0 skips the Run."
+        },
+        "pre": {
+          "$ref": "#/$defs/script",
+          "description": "Runs after the Check; a failure fails the Run. Its output is {pre}."
+        },
+        "post": {
+          "$ref": "#/$defs/script",
+          "description": "Runs after the main step, with HERDR_AUTO_STATUS; a failure fails an ok Run."
+        },
+        "timeout": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Minutes. Default: agentTimeout or scriptTimeout of the settings."
+        },
+        "catchUp": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*\\d+(\\.\\d+)?\\s*(s|m|h|d)\\s*$"
+            },
+            {
+              "const": ""
+            },
+            {
+              "const": false
+            }
+          ],
+          "description": "How late a scheduled time may still start, such as \"2h\"; \"\" or false for none. Default: 2h for daily and weekday schedules, none otherwise."
+        },
+        "requireResult": {
+          "type": "boolean",
+          "default": false,
+          "description": "true: a Run that ends without a result file has failed."
+        }
+      }
+    },
+    "script": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Either file or inline.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A program to run; a relative path is in the Automation's folder."
+        },
+        "inline": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shell text, run with sh -c."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 60,
+          "description": "Seconds."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "required": [
+            "inline"
+          ]
+        }
+      ]
+    },
+    "trigger": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "manual"
+            }
+          },
+          "description": "Only Run now."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "preset"
+          ],
+          "description": "A time, in the computer's local time.",
+          "properties": {
+            "type": {
+              "const": "schedule"
+            },
+            "preset": {
+              "enum": [
+                "every",
+                "daily",
+                "weekdays",
+                "cron"
+              ]
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1440,
+              "description": "every: every N minutes, counted from midnight."
+            },
+            "at": {
+              "type": "string",
+              "pattern": "^\\d{1,2}:\\d{2}$",
+              "description": "daily and weekdays: \"HH:MM\"."
+            },
+            "days": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 6
+              },
+              "minItems": 1,
+              "description": "weekdays: 0 is Sunday. Default: Monday to Friday."
+            },
+            "cron": {
+              "type": "string",
+              "description": "cron: minute hour day month weekday."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "status"
+          ],
+          "description": "An agent changes status.",
+          "properties": {
+            "type": {
+              "const": "agent"
+            },
+            "status": {
+              "enum": [
+                "done",
+                "blocked"
+              ]
+            },
+            "inFolder": {
+              "type": "boolean",
+              "description": "Only agents in the Automation's folder."
+            },
+            "app": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Only this agent app, such as claude or codex."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "source"
+          ],
+          "description": "A new commit.",
+          "properties": {
+            "type": {
+              "const": "git"
+            },
+            "source": {
+              "enum": [
+                "local",
+                "remote"
+              ],
+              "description": "local: the current branch of the folder. remote: branch on its remote."
+            },
+            "branch": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._][A-Za-z0-9._-]*/",
+              "description": "remote: such as \"origin/main\"."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

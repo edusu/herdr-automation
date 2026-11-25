@@ -4,9 +4,22 @@
 // The engine keeps nothing that matters in memory: Runs going and the last instant checked
 // per Automation are in state.json, so the next engine after a reload carries on.
 import { dueBetween, defaultCatchUp, durationMs } from "./cron.js";
-import { startRun, finishRun, updateRun, observe, newRunId, event, ENDED, STARTING_MS } from "./runs.js";
+import { startRun, finishRun, updateRun, observe, newRunId, event, toast, ENDED, STARTING_MS } from "./runs.js";
+import { dayKey } from "./store.js";
 import { inspectWorktree, removeWorktree } from "./shell.js";
 import { agentFirings, gitHead, gitFiring } from "./triggers.js";
+
+/** The settings and their defaults; mod.schema.json and the README's table must match (tests/settings.test.js). */
+export const DEFAULT_SETTINGS = {
+  agent: "claude",
+  space: "Automations",
+  worktreeRetention: "7d",
+  historyRetention: "30d",
+  notifications: "failures",
+  gitPollInterval: "5m",
+  agentTimeout: "60m",
+  scriptTimeout: "10m",
+};
 
 /** How long a leader's lease lasts without renewal. */
 export const LEASE_MS = 30000;
@@ -41,7 +54,9 @@ export function decide({ count, latest, from, now, catchUp, paused }) {
 /** How often the tick looks for worktrees to purge. */
 export const PURGE_MS = 10 * 60000;
 const DEFAULT_GIT_POLL = 5 * 60000;
-const DEFAULT_RETENTION = 7 * 24 * 60 * 60000;
+const DAY = 24 * 60 * 60000;
+const DEFAULT_RETENTION = 7 * DAY;
+const DEFAULT_HISTORY = 30 * DAY;
 
 /**
  * What the purge does with worktree `wt` (`{created}`) as `seen` (`{exists, dirty}`), with
@@ -75,6 +90,24 @@ export async function purgeWorktrees(ctx) {
       else delete next[id];
       return { ...s, worktrees: next };
     });
+  }
+}
+
+// "20261125-093000-k3f9" → "2026-11-25"; null for a folder that is not a Run's.
+const runDay = (id) => (/^\d{8}-/.test(id) ? `${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}` : null);
+
+/**
+ * Removes the history days and run folders older than the settings' historyRetention, by day.
+ * The folder of a Run still going, or whose worktree is still registered, stays.
+ */
+export async function purgeOld(ctx) {
+  const { store, settings, now } = ctx;
+  const cutoff = dayKey(now() - (durationMs(settings.historyRetention) ?? DEFAULT_HISTORY));
+  const { runs, worktrees } = await store.readState();
+  for (const day of await store.historyDays()) if (day < cutoff) await store.removeHistoryDay(day);
+  for (const id of await store.runIds()) {
+    const day = runDay(id);
+    if (day && day < cutoff && !runs[id] && !worktrees[id]) await store.removeRun(id);
   }
 }
 
@@ -146,6 +179,7 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
   async function record(a, status, reason, count, due, trigger = "schedule") {
     const at = now();
     await store.appendHistory(event({ id: newRunId(at), automation: a.id, name: a.name, kind: a.kind, trigger, due, started: at, ended: at, status, reason, count }, at));
+    toast(ctx, a, status, reason);
   }
 
   async function fireDue(doc) {
@@ -216,7 +250,10 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
         fireGit(doc);
         if (now() - purged >= PURGE_MS) {
           purged = now();
-          spawn("purge", () => purgeWorktrees(ctx));
+          spawn("purge", async () => {
+            await purgeWorktrees(ctx);
+            await purgeOld(ctx);
+          });
         }
       } finally {
         busy = false;

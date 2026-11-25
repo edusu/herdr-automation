@@ -1,5 +1,5 @@
 // The data folder (ADR 2): automations.json, state.json, history/<YYYY-MM-DD>.jsonl and
-// runs/<run id>/. File access comes in as `io` ({readTextFile, writeTextFile, mkdir, readdir},
+// runs/<run id>/. File access comes in as `io` ({readTextFile, writeTextFile, mkdir, readdir, unlink, rmdir},
 // Herdr's or node's), so tests run on a temporary folder.
 import { compile, durationMs } from "./cron.js";
 
@@ -12,6 +12,14 @@ const TRIGGERS = ["schedule", "manual", "agent", "git"];
 const REMOTE_BRANCH = /^[A-Za-z0-9._][A-Za-z0-9._-]*\/[A-Za-z0-9._][^\s~^:?*\[\\]*$/;
 const WORKSPACES = ["worktree", "folder"];
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** The fields of an entry of automations.json; automations.schema.json names the same (tests/schema.test.js). */
+export const FIELDS = ["id", "name", "enabled", "kind", "folder", "trigger", "agent", "model", "args", "prompt", "command", "workspace", "base", "check", "pre", "post", "timeout", "catchUp", "requireResult"];
+/** The fields of each Trigger type. */
+export const TRIGGER_FIELDS = { manual: ["type"], schedule: ["type", "preset", "minutes", "at", "days", "cron"], agent: ["type", "status", "inFolder", "app"], git: ["type", "source", "branch"] };
+/** The fields of a Check, pre- or post-script. */
+export const SCRIPT_FIELDS = ["file", "inline", "timeout"];
+// A misspelt optional field would otherwise be ignored without a word.
+const unknown = (o, known) => Object.keys(o).find((k) => !known.includes(k));
 const EMPTY_STATE = { checked: {}, runs: {}, last: {}, worktrees: {}, commits: {} };
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -25,6 +33,7 @@ const optional = (v, ok) => v === undefined || v === null || ok(v);
 // A Check, pre- or post-script: {file} or {inline}, and an optional timeout in seconds.
 function scriptError(s) {
   if (s === undefined || s === null) return null;
+  if (unknown(s, SCRIPT_FIELDS)) return `has an unknown field "${unknown(s, SCRIPT_FIELDS)}"`;
   if (text(s.file) === text(s.inline)) return 'needs either "file" (a path) or "inline" (shell text)';
   if (s.file !== undefined && !text(s.file)) return "file must be a path";
   if (s.inline !== undefined && !text(s.inline)) return "inline must be shell text";
@@ -34,7 +43,7 @@ function scriptError(s) {
 
 /**
  * Checks one entry of automations.json, which people edit by hand. Returns the error in words,
- * or null when the entry can run. Unknown keys are kept and ignored.
+ * or null when the entry can run.
  */
 export function automationError(a) {
   if (!isObject(a)) return "is not an object";
@@ -42,7 +51,9 @@ export function automationError(a) {
   if (!text(a.name)) return "needs a name";
   if (!KINDS.includes(a.kind)) return 'kind must be "agent" or "script"';
   if (!text(a.folder) || !a.folder.startsWith("/")) return "folder must be an absolute path";
+  if (unknown(a, FIELDS)) return `has an unknown field "${unknown(a, FIELDS)}"`;
   if (!isObject(a.trigger) || !TRIGGERS.includes(a.trigger.type)) return `trigger type must be one of ${TRIGGERS.join(", ")}`;
+  if (unknown(a.trigger, TRIGGER_FIELDS[a.trigger.type])) return `trigger has an unknown field "${unknown(a.trigger, TRIGGER_FIELDS[a.trigger.type])}"`;
   if (a.trigger.type === "schedule") {
     try { compile(a.trigger); } catch (e) { return `trigger: ${e.message}`; }
   }
@@ -105,7 +116,16 @@ export function store(root, io) {
       }
     }
   };
-  const doc = (v) => ({ paused: v?.paused === true, automations: Array.isArray(v?.automations) ? v.automations : [] });
+  const list = (dir) => io.readdir(dir).catch(() => []);
+  // Herdr's fs has no recursive remove. A symlink an agent left is unlinked, never followed.
+  const removeTree = async (path) => {
+    for (const e of await io.readdir(path, { withFileTypes: true })) {
+      if (e.isDirectory()) await removeTree(`${path}/${e.name}`);
+      else await io.unlink(`${path}/${e.name}`);
+    }
+    await io.rmdir(path);
+  };
+  const doc = (v) => ({ ...(isObject(v) ? v : {}), paused: v?.paused === true, automations: Array.isArray(v?.automations) ? v.automations : [] });
   const state = (v) => (isObject(v) ? { ...EMPTY_STATE, ...v } : EMPTY_STATE);
 
   return {
@@ -172,12 +192,26 @@ export function store(root, io) {
       return out;
     },
     runDir: (id) => `${files.runs}/${id}`,
+    /** The only folder of a Run an agent may write: its result file. The engine reads no decision from it. */
+    outDir: (id) => `${files.runs}/${id}/out`,
     async writeRunFile(id, name, contents) {
-      await io.mkdir(`${files.runs}/${id}`, { recursive: true });
       const path = `${files.runs}/${id}/${name}`;
+      await io.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
       await io.writeTextFile(path, contents, await io.readTextFile(path));
     },
     readRunFile: (id, name) => io.readTextFile(`${files.runs}/${id}/${name}`),
+    /** The days with a history file, "YYYY-MM-DD". */
+    historyDays: async () => (await list(files.history)).filter((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).map((n) => n.slice(0, 10)),
+    removeHistoryDay: (day) => io.unlink(`${files.history}/${day}.jsonl`),
+    /** The ids of the run folders on disk. */
+    runIds: () => list(files.runs),
+    removeRun: (id) => removeTree(`${files.runs}/${id}`),
+    /** Removes Automation `id` from automations.json, and what state.json kept for it. */
+    async deleteAutomation(id) {
+      await update(files.automations, doc, (d) => ({ ...d, automations: d.automations.filter((x) => x?.id !== id) }));
+      const drop = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => k !== id));
+      await update(files.state, state, (s) => ({ ...s, checked: drop(s.checked), last: drop(s.last), commits: drop(s.commits) }));
+    },
   };
 }
 
