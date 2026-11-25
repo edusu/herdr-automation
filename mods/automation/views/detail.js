@@ -25,19 +25,38 @@ export function detail(m, t) {
       .child(h_flex().gap(6).justify_end()
         .child(button(t, "ask-cancel", "Cancel", () => { m.ask = null; }))
         .child(button(t, "ask-delete", "Delete", (cx) => m.remove(a, cx), true)))))
-    .when(Boolean(m.output), (el) => el.child(card(t, "output", `Run ${m.output.run}`, () => { m.output = null; })
-      .child(div().max_h(260).overflow_y_scrollbar().text_size(TEXT.label).when(Boolean(m.mono), (el) => el.font_family(m.mono)).text_color(t.foreground)
-        .child(m.output.text || "No saved output."))))
+    .when(Boolean(m.output), (el) => el.child(output(m, t, m.output)))
     .child(label(t, "History"))
     .children(runs.length ? runs.map((e) => h_flex().id(`h-${e.run}`).px(6).py(4).gap(8).items_center().rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { m.openRun(e, cx); cx.notify(); })
       .child(dot(t, e.status))
       .child(v_flex().flex_1().min_w(0)
-        .child(div().truncate().child(`${e.status}${e.count > 1 ? ` ×${e.count}` : ""} · ${e.trigger ?? ""}`))
+        .child(div().truncate().child(`${e.status}${e.count > 1 ? ` ×${e.count}` : ""} · ${e.trigger ?? ""}${m.state.worktrees?.[e.run]?.review ? " · needs review" : ""}`))
         .child(div().truncate().text_size(TEXT.label).text_color(t.dim).child([
           when(e.started ?? e.at, now),
           e.ended && e.status !== "skipped" && e.status !== "missed" ? span(e.ended - e.started) : e.status === "running" || e.status === "blocked" ? span(now - e.started) : null,
           e.reason,
         ].filter(Boolean).join(" · ")))))
       : [note(t, "No Runs yet.")]);
+}
+
+// An ended Run: its reason, saved outputs, branch and worktree, with the worktree's actions.
+function output(m, t, o) {
+  const wt = o.worktree;
+  const mono = (el) => el.when(Boolean(m.mono), (x) => x.font_family(m.mono));
+  return card(t, "output", `Run ${o.run}`, () => { m.output = null; })
+    .child(note(t, o.reason))
+    .child(mono(v_flex().id("output-body").max_h(320).overflow_y_scrollbar().gap(6).text_size(TEXT.label).text_color(t.foreground))
+      .children(o.sections.length ? o.sections.map(([title, text]) => v_flex().gap(2).child(label(t, title)).child(div().child(text.trimEnd())))
+        : [note(t, "No saved output.")]))
+    .when(Boolean(o.branch), (el) => el.child(note(t, `Branch ${o.branch}`)))
+    .when(Boolean(o.path), (el) => el.child(note(t, `Worktree ${o.path}${wt?.exists ? (wt.dirty ? " (uncommitted changes)" : "") : " (removed)"}`)))
+    .when(Boolean(wt?.exists), (el) => el.child(h_flex().gap(6).justify_end()
+      .child(button(t, "wt-open", "Open a tab here", (cx) => m.openHere(o, cx)))
+      .child(button(t, "wt-remove", "Remove worktree", (cx) => m.removeWorktree(o, false, cx)))))
+    .when(m.ask?.worktree === o.run, (el) => el.child(v_flex().gap(6)
+      .child(note(t, "This worktree has uncommitted changes. Remove it and lose them?", t.blocked))
+      .child(h_flex().gap(6).justify_end()
+        .child(button(t, "wt-cancel", "Cancel", () => { m.ask = null; }))
+        .child(button(t, "wt-confirm", "Remove", (cx) => m.removeWorktree(o, true, cx), true)))));
 }

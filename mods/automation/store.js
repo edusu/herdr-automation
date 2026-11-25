@@ -3,11 +3,14 @@
 // Herdr's or node's), so tests run on a temporary folder.
 import { compile, durationMs } from "./cron.js";
 
+/** The longest a Check, pre- or post-script may take, in seconds. */
+export const SCRIPT_TIMEOUT_MAX = 600;
+
 const KINDS = ["agent", "script"];
 const TRIGGERS = ["schedule", "manual"];
 const WORKSPACES = ["worktree", "folder"];
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
-const EMPTY_STATE = { checked: {}, runs: {}, last: {} };
+const EMPTY_STATE = { checked: {}, runs: {}, last: {}, worktrees: {} };
 
 const pad = (n) => String(n).padStart(2, "0");
 /** Local "YYYY-MM-DD" of instant `t`. */
@@ -16,6 +19,16 @@ export const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const text = (v) => typeof v === "string" && v.trim() !== "";
 const optional = (v, ok) => v === undefined || v === null || ok(v);
+
+// A Check, pre- or post-script: {file} or {inline}, and an optional timeout in seconds.
+function scriptError(s) {
+  if (s === undefined || s === null) return null;
+  if (text(s.file) === text(s.inline)) return 'needs either "file" (a path) or "inline" (shell text)';
+  if (s.file !== undefined && !text(s.file)) return "file must be a path";
+  if (s.inline !== undefined && !text(s.inline)) return "inline must be shell text";
+  if (!optional(s.timeout, (v) => Number.isInteger(v) && v > 0 && v <= SCRIPT_TIMEOUT_MAX)) return `timeout must be whole seconds from 1 to ${SCRIPT_TIMEOUT_MAX}`;
+  return null;
+}
 
 /**
  * Checks one entry of automations.json, which people edit by hand. Returns the error in words,
@@ -37,7 +50,12 @@ export function automationError(a) {
   if (!optional(a.model, (v) => typeof v === "string")) return "model must be text";
   if (!optional(a.args, (v) => Array.isArray(v) && v.every((x) => typeof x === "string"))) return "args must be a list of text";
   if (!optional(a.workspace, (v) => WORKSPACES.includes(v))) return 'workspace must be "worktree" or "folder"';
-  if (!optional(a.base, (v) => typeof v === "string")) return "base must be text";
+  if (!optional(a.base, (v) => typeof v === "string" && !v.startsWith("-"))) return "base must be a git ref";
+  for (const step of ["check", "pre", "post"]) {
+    const error = optional(a[step], isObject) ? scriptError(a[step]) : "must be an object";
+    if (error) return `${step} ${error}`;
+  }
+  if (!optional(a.requireResult, (v) => typeof v === "boolean")) return "requireResult must be true or false";
   if (!optional(a.enabled, (v) => typeof v === "boolean")) return "enabled must be true or false";
   if (!optional(a.timeout, (v) => typeof v === "number" && v > 0)) return "timeout must be a number of minutes above 0";
   if (!optional(a.catchUp, (v) => v === false || v === "" || durationMs(v) > 0)) return 'catchUp must be a duration such as "2h"';
@@ -99,7 +117,7 @@ export function store(root, io) {
     },
     /** Rewrites automations.json as `fn({paused, automations})`, where automations are the raw entries, bad ones too. */
     updateAutomations: (fn) => update(files.automations, doc, fn),
-    /** state.json: `{checked: {id: ms}, runs: {runId: run}, last: {id: run}}`; empty when missing. */
+    /** state.json: `{checked: {id: ms}, runs: {runId: run}, last: {id: run}, worktrees: {runId: worktree}}`; empty when missing. */
     async readState() {
       const r = await readJson(files.state);
       return state(r.value);

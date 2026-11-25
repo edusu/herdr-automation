@@ -5,6 +5,7 @@ import { nextTimes, compile, when, DAY_NAMES } from "../cron.js";
 import { TEXT, button, chip, toggle, label, note } from "./ui.js";
 
 const PRESETS = [["manual", "Manual"], ["every", "Every N min"], ["daily", "Daily"], ["weekdays", "Weekdays"], ["cron", "Cron"]];
+const STEPS = [["check", "Check (exit 0 goes on, else the Run is skipped)"], ["pre", "Pre-script (its output is {pre})"], ["post", "Post-script (runs where the Run worked)"]];
 // Monday first, as people read a week.
 const WEEK = [1, 2, 3, 4, 5, 6, 0];
 
@@ -36,6 +37,7 @@ export function form(m, t) {
     }
   }
   const daily = f.preset === "daily" || f.preset === "weekdays";
+  const workspace = f.workspace ?? (f.kind === "agent" && f.isRepo ? "worktree" : "folder");
   return v_flex().gap(6).p(10)
     .child(div().font_semibold().child(f.id ? "Edit Automation" : "New Automation"))
     .child(label(t, "Name")).child(input(f.name))
@@ -50,7 +52,25 @@ export function form(m, t) {
       .child(label(t, "Model (optional, passed as --model)")).child(input(f.model))
       .child(label(t, "Extra arguments (separated by spaces)")).child(input(f.args))
       .child(label(t, "Prompt")).child(area(f.prompt)))
-    .when(f.kind === "script", (el) => el.child(label(t, "Command (run with sh in the folder)")).child(area(f.command)))
+    .when(f.kind === "script", (el) => el.child(label(t, "Command (run with sh where the Run works)")).child(area(f.command)))
+    .child(note(t, "Variables: {pre} {check} {folder} {trigger} {commit} {branch} {date} {result_file} {run_dir}. In shell text, leave them unquoted."))
+    .child(label(t, "Workspace"))
+    .child(row(...[
+      f.isRepo === false && workspace !== "worktree" ? null : chip(t, "ws-worktree", "New worktree", workspace === "worktree", () => { f.workspace = "worktree"; }),
+      chip(t, "ws-folder", "The folder as it is", workspace === "folder", () => { f.workspace = "folder"; }),
+      f.isRepo === false ? note(t, "Not a git repository") : null,
+    ].filter(Boolean)))
+    .when(workspace === "worktree", (el) => el.child(label(t, "Base (a git ref)")).child(input(f.base)))
+    .children(STEPS.map(([k, title]) => v_flex().gap(4)
+      .child(label(t, title))
+      .child(h_flex().gap(6).items_center()
+        .child(chip(t, `${k}-inline`, "Inline", f[`${k}Mode`] === "inline", () => { f[`${k}Mode`] = "inline"; }))
+        .child(chip(t, `${k}-file`, "File", f[`${k}Mode`] === "file", () => { f[`${k}Mode`] = "file"; }))
+        .child(div().flex_1().min_w(0).child(input(f[k])))
+        .child(div().w(60).child(input(f[`${k}Timeout`])))
+        .child(div().text_size(TEXT.label).text_color(t.dim).child("s")))))
+    .child(h_flex().gap(8).items_center().child(toggle(t, "form-result", f.requireResult, () => { f.requireResult = !f.requireResult; }))
+      .child(div().child("Require a result file ({result_file})")))
     .child(label(t, "Trigger"))
     .child(row(...PRESETS.map(([p, name]) => chip(t, `preset-${p}`, name, f.preset === p, () => { f.preset = p; }))))
     .when(f.preset === "every", (el) => el.child(row(div().child("Every"), div().w(70).child(input(f.minutes)), div().child("minutes"))))

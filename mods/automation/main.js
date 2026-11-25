@@ -9,6 +9,7 @@ import { store, automationError } from "./store.js";
 import { createEngine } from "./engine.js";
 import { isActive } from "./runs.js";
 import { host, io, lease } from "./host.js";
+import { repoRoot } from "./shell.js";
 import { TEXT } from "./views/ui.js";
 import { header, list } from "./views/list.js";
 import { detail } from "./views/detail.js";
@@ -26,7 +27,11 @@ const DEFAULT_SETTINGS = {
 };
 const TICK_MS = 5000;
 const HISTORY_DAYS = 30;
-const FIELDS = ["name", "folder", "model", "args", "prompt", "command", "minutes", "at", "cron", "timeout", "catchUp"];
+const STEPS = ["check", "pre", "post"];
+const FIELDS = ["name", "folder", "model", "args", "prompt", "command", "minutes", "at", "cron", "timeout", "catchUp", "base", ...STEPS.flatMap((k) => [k, `${k}Timeout`])];
+// The run files the panel shows for an ended Run, in pipeline order.
+const OUTPUTS = [["Check", "check.txt"], ["Check (stderr)", "check.err.txt"], ["Pre-script", "pre.txt"], ["Pre-script (stderr)", "pre.err.txt"],
+  ["Terminal (last 200 lines)", "tail.txt"], ["Post-script", "post.txt"], ["Post-script (stderr)", "post.err.txt"], ["Result file", "result.md"]];
 
 const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "automation";
 const cleaned = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
@@ -123,11 +128,31 @@ export default class Automation extends View {
     this.act(cx, () => this.store.updateAutomations((d) => ({ ...d, automations: d.automations.filter((x) => x?.id !== a.id) })));
   }
 
-  /** A history row: its tab while it is open, else the saved tail of its terminal. */
+  /** A history row: its tab while it is open, else what the Run saved and its worktree. */
   openRun(e, cx) {
     if (this.tabOpen(e)) return this.goTo(e);
     this.act(cx, async () => {
-      this.output = { run: e.run, text: (await this.store.readRunFile(e.run, "tail.txt").catch(() => null)) ?? (e.reason ? `${e.status}: ${e.reason}` : "") };
+      const sections = await Promise.all(OUTPUTS.map(async ([title, name]) => [title, await this.store.readRunFile(e.run, name).catch(() => null)]));
+      this.output = {
+        run: e.run, name: e.name, reason: e.reason ? `${e.status}: ${e.reason}` : e.status, branch: e.branch, path: e.worktree,
+        sections: sections.filter(([, text]) => text?.trim()),
+        worktree: await this.engine.worktree(e.run),
+      };
+    });
+  }
+
+  /** Open a tab here: a shell in the Run's worktree, in the Automations space. */
+  openHere(o, cx) {
+    this.act(cx, async () => this.goTo(await host.openTab({ space: this.settings.space, name: o.name, folder: o.worktree.path })));
+  }
+
+  /** Remove worktree; a dirty one only after the person said yes (`confirmed`). */
+  removeWorktree(o, confirmed, cx) {
+    if (o.worktree.dirty && !confirmed) { this.ask = { worktree: o.run }; return; }
+    this.ask = null;
+    this.act(cx, async () => {
+      await this.engine.removeWorktree(o.run);
+      if (this.output === o) this.output = { ...o, worktree: null };
     });
   }
 
@@ -151,12 +176,34 @@ export default class Automation extends View {
       cron: text(tr.cron ?? "0 9 * * 1-5", "0 9 * * 1-5"),
       timeout: text(a?.timeout ? String(a.timeout) : "", "From the settings"),
       catchUp: text(catchUp, "Default: 2h daily, none otherwise"),
+      // null: the default, a worktree for an agent in a git repository.
+      workspace: a?.workspace ?? null, isRepo: null,
+      base: text(a?.base, "The remote's default branch"),
+      requireResult: a?.requireResult === true,
     };
+    for (const k of STEPS) {
+      const s = a?.[k];
+      this.form[`${k}Mode`] = s?.file ? "file" : "inline";
+      this.form[k] = text(s?.file ?? s?.inline, "Shell text, or a file path");
+      this.form[`${k}Timeout`] = text(s?.timeout ? String(s.timeout) : "", "60");
+    }
     this.screen = { name: "form", back: this.screen };
     this.form.name.focus();
     const f = this.form;
     cx.spawn(async (cx) => {
       try { f.agents = await host.knownAgents(); } catch (e) { f.agentsError = `Cannot list the agents: ${e?.message ?? e}`; }
+      cx.notify();
+    });
+    this.checkRepo(cx);
+  }
+
+  // Whether the form's folder is a git repository, which decides if a worktree is offered.
+  checkRepo(cx) {
+    const f = this.form, folder = f.folder.value().trim();
+    if (!folder) return;
+    cx.spawn(async (cx) => {
+      const isRepo = Boolean(await repoRoot(host.exec, folder));
+      if (this.form === f && f.folder.value().trim() === folder) f.isRepo = isRepo;
       cx.notify();
     });
   }
@@ -174,7 +221,11 @@ export default class Automation extends View {
     const f = this.form;
     cx.spawn(async (cx) => {
       const folder = await pickFolder({ prompt: "Choose" }).catch(() => null);
-      if (folder && this.form === f) f.folder.set_value(folder);
+      if (folder && this.form === f) {
+        f.folder.set_value(folder);
+        f.isRepo = null;
+        this.checkRepo(cx);
+      }
       cx.notify();
     });
   }
@@ -196,16 +247,30 @@ export default class Automation extends View {
       command: agent ? undefined : f.command.value(),
       timeout: timeout ? Number(timeout) : undefined,
       catchUp: catchUp === "" ? undefined : /^(none|0)$/i.test(catchUp) ? "" : catchUp,
+      workspace: f.workspace ?? undefined,
+      base: f.workspace !== "folder" && v("base") ? v("base") : undefined,
+      requireResult: f.requireResult || undefined,
+      ...Object.fromEntries(STEPS.map((k) => {
+        const body = v(k), secs = v(`${k}Timeout`);
+        return [k, body ? cleaned({ [f[`${k}Mode`]]: body, timeout: secs ? Number(secs) : undefined }) : undefined];
+      })),
     });
     const error = automationError(a);
     if (error) { f.error = `This Automation ${error}.`; return; }
-    const id = a.id;
-    this.closeForm(cx);
-    this.screen = { name: "detail", id };
-    this.act(cx, () => this.store.updateAutomations((d) => ({
-      ...d,
-      automations: d.automations.some((x) => x?.id === id) ? d.automations.map((x) => (x?.id === id ? a : x)) : [...d.automations, a],
-    })));
+    cx.spawn(async (cx) => {
+      if (a.workspace === "worktree" && !(await repoRoot(host.exec, a.folder))) {
+        f.error = "The folder is not a git repository, so a Run cannot have a worktree. Choose Folder.";
+        return cx.notify();
+      }
+      if (this.form !== f) return;
+      const id = a.id;
+      this.closeForm(cx);
+      this.screen = { name: "detail", id };
+      this.act(cx, () => this.store.updateAutomations((d) => ({
+        ...d,
+        automations: d.automations.some((x) => x?.id === id) ? d.automations.map((x) => (x?.id === id ? a : x)) : [...d.automations, a],
+      })));
+    });
   }
 
   render() {

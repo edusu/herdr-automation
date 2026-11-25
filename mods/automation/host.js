@@ -1,6 +1,6 @@
 // The only module that reaches Herdr for effects: tabs, the space, terminals, agents, toasts,
-// the lease in shared state and file access. The engine and the views get these objects.
-import { exec, hc, run, spaces, terminals, agents, notify, knownAgents, readTextFile, writeTextFile, shared, setShared } from "herdr";
+// programs (exec), the lease in shared state and file access. The engine and the views get these objects.
+import { exec, hc, run, spaces, terminals, agents, notify, knownAgents, readTextFile, writeTextFile, shared, setShared, appHome, home } from "herdr";
 import * as fs from "fs/promises";
 
 /** File access for store.js. */
@@ -26,6 +26,15 @@ async function doCommand(name, args) {
 }
 
 export const host = {
+  /** Herdr's exec, for shell.js. */
+  exec,
+  /** worktrees.directory of Herdr's settings.json, as New worktree reads it; default ~/.herdr/worktrees. */
+  async worktreesDir() {
+    let given = null;
+    try { given = JSON.parse((await readTextFile(`${appHome()}/settings.json`)) ?? "{}")?.worktrees?.directory; } catch {}
+    const dir = typeof given === "string" && given.trim() ? given.trim() : "~/.herdr/worktrees";
+    return dir === "~" || dir.startsWith("~/") ? home() + dir.slice(1) : dir;
+  },
   /** A tab without focus in the space named `space`; the space is made with this tab as its first one when missing. */
   async openTab({ space, name, folder, argv, task }) {
     const found = spaces().find((s) => s.named && s.name === space && !s.machine);

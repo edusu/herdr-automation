@@ -47,7 +47,7 @@ test("the main step of an agent and of a script", () => {
   assert.throws(() => mainStep({ ...a, agent: "codex" }, { agents, settings: SETTINGS }), /not installed/);
   assert.throws(() => mainStep({ ...a, agent: "nope" }, { agents, settings: SETTINGS }), /not one of/);
   const s = mainStep({ kind: "script", command: "make test; exit 3" }, { agents, settings: SETTINGS, exitFile: "/r/exit" });
-  assert.deepEqual(s.argv.slice(3), ["sh", "make test; exit 3", "/r/exit"]);
+  assert.deepEqual(s.argv.slice(-3), ["sh", "make test; exit 3", "/r/exit"]);
 });
 
 test("a script tab's command line writes the exit code to the file", async (t) => {

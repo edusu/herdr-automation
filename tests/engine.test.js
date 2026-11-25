@@ -119,7 +119,7 @@ test("an agent Run: blocked posts a toast, then done is ok", async (t) => {
   const agent = { ...every, id: "g", kind: "agent", prompt: "Hi", trigger: { type: "manual" } };
   const { s, host, engine } = await setup(t, [agent], at(25, 9));
   const run = await engine.runNow(agent);
-  assert.deepEqual([host.opened[0].argv, host.opened[0].task], [["claude"], "Hi"]);
+  assert.deepEqual([host.opened[0].argv, host.opened[0].task], [["claude", "--add-dir", s.runDir(run.id)], "Hi"]);
   host.status.set(run.terminal, "working");
   await engine.tick();
   host.status.set(run.terminal, "blocked");
@@ -159,7 +159,7 @@ test("a Run cut off while starting is failed by the next engine", async (t) => {
   await s.updateState((st) => ({ ...st, runs: { x: { id: "x", automation: "e", name: "Every", kind: "script", status: "starting", started: now() } } }));
   await engine.tick();
   assert.equal((await s.readState()).runs.x.status, "starting");
-  now.add(3 * MIN);
+  now.add(6 * MIN);
   await engine.tick();
   assert.equal((await s.readState()).last.e.status, "failed");
 });

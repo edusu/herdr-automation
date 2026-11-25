@@ -1,8 +1,10 @@
-// The tick: leader lease, Runs going, due schedule Triggers, Catch-up, Missed and pauses.
+// The tick: leader lease, Runs going, due schedule Triggers, Catch-up, Missed, pauses and the
+// purge of old worktrees.
 // The engine keeps nothing that matters in memory: Runs going and the last instant checked
 // per Automation are in state.json, so the next engine after a reload carries on.
 import { dueBetween, defaultCatchUp, durationMs } from "./cron.js";
 import { startRun, finishRun, updateRun, observe, newRunId, event, ENDED, STARTING_MS } from "./runs.js";
+import { inspectWorktree, removeWorktree } from "./shell.js";
 
 /** How long a leader's lease lasts without renewal. */
 export const LEASE_MS = 30000;
@@ -34,6 +36,45 @@ export function decide({ count, latest, from, now, catchUp, paused }) {
   return { fire, missed: gap || !fire ? count - (fire ? 1 : 0) : 0, skipped: 0 };
 }
 
+/** How often the tick looks for worktrees to purge. */
+export const PURGE_MS = 10 * 60000;
+const DEFAULT_RETENTION = 7 * 24 * 60 * 60000;
+
+/**
+ * What the purge does with worktree `wt` (`{created}`) as `seen` (`{exists, dirty}`), with
+ * `retention` in ms: "keep" while it is young, "review" when it is old and dirty (never
+ * removed), else "remove".
+ */
+export function purgeDecision(wt, seen, now, retention) {
+  if (now - wt.created < retention) return "keep";
+  return seen.exists && seen.dirty ? "review" : "remove";
+}
+
+/**
+ * Removes the worktrees of ended Runs older than the settings' worktreeRetention when they are
+ * clean, with their branch when it has no commits of its own; marks dirty ones for review.
+ * The registry is `worktrees` in state.json, by Run id.
+ */
+export async function purgeWorktrees(ctx) {
+  const { host, store, settings, now } = ctx;
+  const retention = durationMs(settings.worktreeRetention) ?? DEFAULT_RETENTION;
+  const { worktrees, runs } = await store.readState();
+  for (const [id, wt] of Object.entries(worktrees)) {
+    if (runs[id]) continue;
+    const seen = await inspectWorktree(host.exec, wt);
+    const d = purgeDecision(wt, seen, now(), retention);
+    if (d === "keep" || (d === "review" && wt.review)) continue;
+    if (d === "remove" && (await removeWorktree(host.exec, wt, { deleteBranch: seen.commits === 0 }))) continue;
+    await store.updateState((s) => {
+      if (!s.worktrees[id]) return s;
+      const next = { ...s.worktrees };
+      if (d === "review") next[id] = { ...wt, review: true };
+      else delete next[id];
+      return { ...s, worktrees: next };
+    });
+  }
+}
+
 /**
  * The engine of one mod copy. `lease` is `{get, set}` over Herdr's shared state, `id` this
  * copy's lease owner, `settings()` the current settings, `now()` the clock.
@@ -41,7 +82,7 @@ export function decide({ count, latest, from, now, catchUp, paused }) {
 export function createEngine({ store, host, lease, id, settings, now = Date.now }) {
   const ctx = { store, host, now, get settings() { return settings(); } };
   const gone = new Map();
-  let busy = false;
+  let busy = false, purged = -Infinity;
 
   /** Whether this copy fires Runs: it holds a live lease, renewed at half its life, or takes a free one. */
   function leader() {
@@ -55,7 +96,7 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
     const { runs } = await store.readState();
     for (const run of Object.values(runs)) {
       if (run.status === "starting") {
-        if (now() - run.started > STARTING_MS) await finishRun(ctx, run, { status: "failed", reason: "Herdr stopped while the Run was starting" });
+        if (now() > (run.startBy ?? run.started + STARTING_MS)) await finishRun(ctx, run, { status: "failed", reason: "Herdr stopped while the Run was starting" });
         continue;
       }
       const alive = host.alive(run.terminal);
@@ -107,6 +148,10 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
         const doc = await store.readAutomations();
         await watchRuns();
         await fireDue(doc);
+        if (now() - purged >= PURGE_MS) {
+          purged = now();
+          await purgeWorktrees(ctx);
+        }
       } finally {
         busy = false;
       }
@@ -114,13 +159,28 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
     },
     /** Run now. A Run of it still going makes this one skipped (overlap). */
     runNow: (automation) => startRun(ctx, automation, "manual"),
-    /** Stop: ends the Run as stopped, then its terminal. */
+    /** Stop: ends the Run as stopped, and its terminal. */
     async stop(runId) {
       const run = (await store.readState()).runs[runId];
-      if (!run) return null;
-      const ended = await finishRun(ctx, run, { status: "stopped", reason: "Stopped from the panel" });
-      if (run.terminal) host.kill(run.terminal);
-      return ended;
+      return run ? finishRun(ctx, run, { status: "stopped", reason: "Stopped from the panel" }) : null;
+    },
+    /** The worktree of Run `runId` still registered, with `exists`, `dirty` and `commits`; null when there is none. */
+    async worktree(runId) {
+      const wt = (await store.readState()).worktrees[runId];
+      return wt ? { ...wt, ...(await inspectWorktree(host.exec, wt)) } : null;
+    },
+    /** Remove worktree from the panel: with its changes, and its branch when it has no commits of its own. */
+    async removeWorktree(runId) {
+      const wt = (await store.readState()).worktrees[runId];
+      if (!wt) return;
+      const { commits } = await inspectWorktree(host.exec, wt);
+      const error = await removeWorktree(host.exec, wt, { force: true, deleteBranch: commits === 0 });
+      if (error) throw new Error(error);
+      await store.updateState((s) => {
+        const next = { ...s.worktrees };
+        delete next[runId];
+        return { ...s, worktrees: next };
+      });
     },
     /** Gives the lease up, so another copy takes over at its next tick. */
     release() {
