@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
+import { RUN_LABEL } from "../mods/automation/runs.js";
 
 const writing = new Map();
 /** Herdr's readTextFile / writeTextFile contract on the real disk. */
@@ -87,20 +88,25 @@ export function fakeHost() {
   let n = 0;
   const h = {
     opened: [], closed: [], killed: [], labels: [], toasts: [],
-    live: new Set(), status: new Map(), agentList: [],
+    live: new Set(), tabs: new Set(), status: new Map(), agentList: [],
     async openTab(args) {
       n++;
       h.opened.push(args);
       const terminal = `t${n}`;
       h.live.add(terminal);
+      h.tabs.add(`tab${n}`);
       return { space: "s1", tab: `tab${n}`, terminal };
     },
     async label(t, k, v) { h.labels.push([t, k, v]); },
-    closeTab(tab) { h.closed.push(tab); },
+    closeTab(tab) { h.closed.push(tab); h.tabs.delete(tab); },
+    tabOpen: (tab) => h.tabs.has(tab),
     kill(t) { h.killed.push(t); h.live.delete(t); },
     alive: (t) => h.live.has(t),
-    agentStatus: (t) => h.status.get(t) ?? null,
-    agents: () => h.agentList,
+    // The Runs' own agents carry the Run label, as hc label puts it on them.
+    look: () => ({
+      terminals: new Set(h.live),
+      agents: [...h.agentList, ...[...h.status].map(([address, status]) => ({ address, status, labels: { [RUN_LABEL]: "run" } }))],
+    }),
     tail: async (t) => (h.live.has(t) ? `tail of ${t}` : null),
     knownAgents: async () => [{ key: "claude", name: "Claude Code", run: ["claude"], installed: true }],
     exec,

@@ -1,8 +1,22 @@
 // The Run state machine and the steps that start and end a Run. Effects go through `host`
 // (tabs, terminals, agents, toasts) and `store` (files), so tests drive it with fakes.
-import { durationMs } from "./cron.js";
+import { durationMs, hhmm, pad } from "./cron.js";
 import { dayKey, SCRIPT_TIMEOUT_MAX } from "./store.js";
 import { scriptArgv, shellRef, runScript, addWorktree, repoRoot, head } from "./shell.js";
+
+/** The settings and their defaults; mod.schema.json and the README's table must match (tests/settings.test.js). */
+export const DEFAULT_SETTINGS = {
+  agent: "claude",
+  space: "Automations",
+  worktreeRetention: "7d",
+  historyRetention: "30d",
+  notifications: "failures",
+  gitPollInterval: "5m",
+  agentTimeout: "60m",
+  scriptTimeout: "10m",
+};
+/** Duration setting `key` in ms; its default when the person's value is not a duration. */
+export const ms = (settings, key) => durationMs(settings[key]) ?? durationMs(DEFAULT_SETTINGS[key]);
 
 /** A Run in one of these is still going. */
 export const ACTIVE = ["starting", "running", "blocked"];
@@ -10,8 +24,9 @@ export const ENDED = ["ok", "failed", "timed out", "stopped", "closed"];
 /** The label on the terminal of every Run's main step, so agents an Automation started are known. */
 export const RUN_LABEL = "herdr.automation.run";
 /**
- * A Run still "starting" this long after its Check and pre-script could have ended (`startBy`)
- * was cut off by a reload or a quit. It covers git fetch and worktree add.
+ * A Run still "starting" this long after its last step ended, plus the time its next scripts
+ * may take (`startBy`, moved on after each step), was cut off by a reload or a quit. It covers
+ * git fetch, worktree add and opening the tab.
  */
 export const STARTING_MS = 5 * 60000;
 
@@ -23,25 +38,41 @@ const LEVELS = { failures: FAILURES, "failures-and-skips": [...FAILURES, ...SKIP
 export const notifies = (level, status) => (LEVELS[level] ?? LEVELS.failures).includes(status);
 
 const TOAST_LEVELS = { failed: "error", "timed out": "error", blocked: "warning", skipped: "warning", missed: "warning", ok: "success" };
-/** A toast for `run` becoming `status`, when the settings' level asks for one; a click goes to `terminal`. */
+/** A toast for `run` becoming `status`, when the settings' level asks for one; a click goes to `terminal` (see toastAction). */
 export function toast({ host, settings }, run, status, reason, terminal = null) {
   if (!notifies(settings.notifications, status)) return;
   host.notify({ title: `${run.name}: ${status}`, body: reason ?? "", level: TOAST_LEVELS[status] ?? "info", terminal, blocked: status === "blocked" });
 }
 
-const pad = (n) => String(n).padStart(2, "0");
+/**
+ * What a click on a toast does: focus the Run's `terminal` while it is there (the agent, when
+ * `blocked`), else open the dialog, unless it is open already, since mod.open would close it.
+ */
+export function toastAction({ terminal, blocked = false, dialogOpen = false }) {
+  if (terminal) return { name: blocked ? "agent.focus" : "pane.focus", args: { terminal } };
+  return dialogOpen ? undefined : { name: "mod.open", args: { name: "automation" } };
+}
+
+/**
+ * The Run of Automation `id` still going in `state`, else a Run now a copy asked the leader
+ * for, shown as starting (`requested: true`, its id the request's); null when there is none.
+ */
+export function goingRun(state, id) {
+  const run = Object.values(state.runs).find((r) => r.automation === id && isActive(r));
+  if (run) return run;
+  const [key, asked] = Object.entries(state.requests).find(([, r]) => r.type === "run" && r.automation === id) ?? [];
+  return asked ? { id: key, automation: id, status: "starting", started: asked.at, requested: true } : null;
+}
+
 /** "20261125-093000-k3f9": sortable, and safe as a folder name and a label value. */
 export function newRunId(now, random = Math.random) {
-  const d = new Date(now);
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const stamp = `${dayKey(now).replaceAll("-", "")}-${hhmm(now).replace(":", "")}${pad(new Date(now).getSeconds())}`;
   return `${stamp}-${Math.floor(random() * 36 ** 4).toString(36).padStart(4, "0")}`;
 }
 
 /** The timeout of an Automation's Runs in ms: its own `timeout` (minutes), else the setting for its kind. */
 export function timeoutMs(automation, settings) {
-  if (automation.timeout > 0) return automation.timeout * 60000;
-  const agent = automation.kind === "agent";
-  return durationMs(agent ? settings.agentTimeout : settings.scriptTimeout) ?? (agent ? 60 : 10) * 60000;
+  return automation.timeout > 0 ? automation.timeout * 60000 : ms(settings, automation.kind === "agent" ? "agentTimeout" : "scriptTimeout");
 }
 
 /** The variables of prompts, commands and inline scripts. */
@@ -53,6 +84,8 @@ export const VALUE_MAX = 64 * 1024;
 const RESULT_MAX = 8 * 1024;
 /** The result file, in the Run's out/ folder. */
 export const RESULT_FILE = "result.md";
+/** How many lines of a Run's terminal are kept in tail.txt. */
+export const TAIL_LINES = 200;
 /** The timeout of a Check, pre- or post-script without one, in seconds. */
 const SCRIPT_TIMEOUT = 60;
 
@@ -92,16 +125,25 @@ export function mainStep(automation, { agents, settings, exitFile, vars = {}, en
 }
 
 /**
- * Where a Run of `automation` works: its `workspace`, else a worktree for an agent in a git
- * repository. An agent-status Trigger defaults to the folder, so the Run sees that agent's work.
+ * The workspace of an Automation without one: a worktree for an agent in a git repository
+ * (`isRepo`). An agent-status Trigger gets the folder, so the Run sees that agent's work.
  */
-export async function workspaceOf(exec, automation) {
-  if (automation.workspace) return automation.workspace;
-  if (automation.trigger?.type === "agent") return "folder";
-  return automation.kind === "agent" && (await repoRoot(exec, automation.folder)) ? "worktree" : "folder";
+export const defaultWorkspace = (kind, triggerType, isRepo) => (kind === "agent" && triggerType !== "agent" && isRepo ? "worktree" : "folder");
+
+/**
+ * Where a Run of `automation` in `folder` works: `{workspace, root}`, `root` being the top of
+ * the repository, looked up only when a worktree may be wanted (null otherwise or outside one).
+ */
+export async function workspaceOf(exec, automation, folder) {
+  const { workspace, kind, trigger } = automation;
+  if ((workspace ?? defaultWorkspace(kind, trigger?.type, true)) === "folder") return { workspace: "folder", root: null };
+  const root = await repoRoot(exec, folder);
+  return { workspace: workspace ?? defaultWorkspace(kind, trigger?.type, Boolean(root)), root };
 }
 
 const scriptMs = (s) => (s ? Math.min(s.timeout ?? SCRIPT_TIMEOUT, SCRIPT_TIMEOUT_MAX) * 1000 : 0);
+// A step's output as {pre} or {check}.
+const stepValue = (text) => (text ?? "").replace(/\n+$/, "").slice(0, VALUE_MAX);
 const firstLine = (r) => (r.stdout.trim() || r.stderr.trim()).split("\n")[0].trim();
 
 // Runs the Check, pre- or post-script `step` of a Run and saves its output in the Run's folder
@@ -117,13 +159,13 @@ async function runStepScript({ host, store }, run, step, script, { cwd, folder, 
   });
   await store.writeRunFile(run.id, `${step}.txt`, r.stdout);
   if (r.stderr) await store.writeRunFile(run.id, `${step}.err.txt`, r.stderr);
-  return { ...r, value: r.stdout.replace(/\n+$/, "").slice(0, VALUE_MAX), line: firstLine(r) };
+  return { ...r, value: stepValue(r.stdout), line: firstLine(r) };
 }
 
 /**
  * What a going Run becomes after one look at its terminal: the fields that change, or null.
- * `obs`: `{alive}` (the terminal still exists), `agent` (its agents() status or null) and
- * `exit` (a script's exit code file, or null).
+ * `obs`: `alive` (the terminal exists, or has been missing too briefly to count), `gone` (missing
+ * on this look), `agent` (its agents() status or null) and `exit` (a script's exit code file, or null).
  */
 export function observe(run, obs, now) {
   if (run.kind === "script" && obs.exit != null && String(obs.exit).trim() !== "") {
@@ -139,7 +181,8 @@ export function observe(run, obs, now) {
   // "done" is a finished turn; "idle" too once someone has looked, but only after it worked,
   // since a new agent is idle before its first message arrives.
   if (s === "done" || (s === "idle" && run.sawWork)) return { status: "ok" };
-  if (s === null && run.seen) return { status: "failed", reason: "The agent exited" };
+  // A closed tab takes its agent with it: while the terminal is missing, the gone looks decide.
+  if (s === null && run.seen && !obs.gone) return { status: "failed", reason: "The agent exited" };
   if (s && !run.seen) return { seen: true };
   return null;
 }
@@ -150,7 +193,8 @@ export const event = (run, at) => {
   return { at, run: id, automation, name, kind, trigger, due, started, ended, status, reason, count, space, tab, terminal, worktree, branch };
 };
 
-const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "automation";
+/** A name as a lower-case word for ids, folders and branches. */
+export const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "automation";
 
 /**
  * Starts a Run of `automation` set off by `trigger` ("schedule", "catch-up", "manual", or the
@@ -165,6 +209,15 @@ export async function startRun(ctx, automation, trigger, due = null, fired = {})
   const run = {
     id: newRunId(now()), automation: automation.id, name: automation.name, kind: automation.kind, trigger, due, started: now(), status: "starting",
     startBy: now() + STARTING_MS + scriptMs(automation.check) + scriptMs(automation.pre),
+  };
+  // A Stop can end the Run while it starts. Each step moves its deadline on and resolves whether it is still there.
+  const still = async (rest = 0) => {
+    let there = false;
+    await store.updateState((s) => {
+      there = Boolean(s.runs[run.id]);
+      return there ? { ...s, runs: { ...s.runs, [run.id]: { ...s.runs[run.id], startBy: now() + STARTING_MS + rest } } } : s;
+    });
+    return there;
   };
   let overlap = false;
   await store.updateState((s) => {
@@ -189,14 +242,19 @@ export async function startRun(ctx, automation, trigger, due = null, fired = {})
       const r = await runStepScript(ctx, run, "check", automation.check, before);
       if (r.code !== 0) return finishRun(ctx, run, { status: "skipped", reason: r.line || `The Check exited with code ${r.code}` });
       vars.check = r.value;
+      if (!(await still(scriptMs(automation.pre)))) return null;
     }
     if (automation.pre) {
       const r = await runStepScript(ctx, run, "pre", automation.pre, before);
       if (r.code !== 0) return finishRun(ctx, run, { status: "failed", reason: `Pre-script: ${r.line || `exit code ${r.code}`}` });
       vars.pre = r.value;
+      if (!(await still())) return null;
     }
-    if ((await workspaceOf(host.exec, automation)) === "worktree") {
-      const wt = { ...(await addWorktree(host.exec, { folder, base: fired.commit ?? automation.base, dir: await host.worktreesDir(), name: `${slug(automation.name)}-${run.id}` })), created: now() };
+    const [{ workspace, root }, dir, agents] = await Promise.all([
+      workspaceOf(host.exec, automation, folder), host.worktreesDir(), automation.kind === "agent" ? host.knownAgents() : [],
+    ]);
+    if (workspace === "worktree") {
+      const wt = { ...(await addWorktree(host.exec, { root, folder, remote: fired.remote, base: fired.commit ?? automation.base, dir, name: `${slug(automation.name)}-${run.id}` })), created: now() };
       // Registered at once, so the purge finds it even when the Run fails after this.
       await store.updateState((s) => ({ ...s, worktrees: { ...s.worktrees, [run.id]: wt } }));
       vars.folder = wt.path;
@@ -204,10 +262,8 @@ export async function startRun(ctx, automation, trigger, due = null, fired = {})
     }
     Object.assign(vars, await head(host.exec, vars.folder), fired.commit ? { commit: fired.commit } : {});
     current = { ...current, folder: vars.folder, branch: vars.branch || undefined, commit: vars.commit || undefined };
-    const step = mainStep(automation, {
-      agents: automation.kind === "agent" ? await host.knownAgents() : [],
-      settings, exitFile: `${runDir}/exit`, vars, env: runEnv(vars, run),
-    });
+    const step = mainStep(automation, { agents, settings, exitFile: `${runDir}/exit`, vars, env: runEnv(vars, run) });
+    if (!(await still())) return null;
     const opened = await host.openTab({ space: settings.space, name: automation.name, folder: vars.folder, ...step });
     // A missing label only weakens the agent-status loop guard; the Run itself goes on.
     await host.label(opened.terminal, RUN_LABEL, run.id).catch(() => {});
@@ -216,19 +272,29 @@ export async function startRun(ctx, automation, trigger, due = null, fired = {})
     // What the end of the Run decides on is kept here, never read back from a file an agent may write.
     const going = { ...current, ...opened, vars: kept, status: "running", deadline: now() + timeoutMs(automation, settings),
       home: automation.folder, post: automation.post, requireResult: automation.requireResult === true };
-    let previous = null;
+    let previous = null, there = false;
     await store.updateState((s) => {
-      previous = s.last[automation.id] ?? null;
-      return { ...s, runs: { ...s.runs, [run.id]: going } };
+      there = Boolean(s.runs[run.id]);
+      if (!there) return s;
+      previous = s.tabs[automation.id] ?? null;
+      const tab = { space: opened.space, tab: opened.tab, terminal: opened.terminal, run: run.id };
+      return { ...s, runs: { ...s.runs, [run.id]: going }, tabs: { ...s.tabs, [automation.id]: tab } };
     });
+    if (!there) {
+      await closeTab(host, opened.tab);
+      return null;
+    }
     await store.appendHistory(event(going, now()));
-    // One live tab per Automation. A timed-out Run's tab stays: its program may still be at work.
-    if (previous?.tab && previous.tab !== opened.tab && previous.status !== "timed out") host.closeTab(previous.tab);
+    // One live tab per Automation: the overlap rule means the previous Run has ended.
+    if (previous && previous.tab !== opened.tab) await closeTab(host, previous.tab);
     return going;
   } catch (e) {
     return finishRun(ctx, current, { status: "failed", reason: e?.message ?? String(e) });
   }
 }
+
+// Closes tab `id` while it is open. A failure here must not fail the Run at hand.
+const closeTab = (host, id) => Promise.resolve().then(() => host.tabOpen(id) && host.closeTab(id)).catch(() => {});
 
 // After the main step: requireResult, then the post-script where the Run worked. Resolves the
 // change to the ended Run, or null.
@@ -240,7 +306,7 @@ async function afterMainStep(ctx, ended) {
   if (!ended.post) return change;
   const status = change?.status ?? ended.status, reason = change?.reason ?? ended.reason ?? "";
   const [pre, check] = await Promise.all(["pre", "check"].map((s) => store.readRunFile(ended.id, `${s}.txt`).catch(() => null)));
-  const vars = { ...ended.vars, pre: (pre ?? "").replace(/\n+$/, "").slice(0, VALUE_MAX), check: (check ?? "").replace(/\n+$/, "").slice(0, VALUE_MAX) };
+  const vars = { ...ended.vars, pre: stepValue(pre), check: stepValue(check) };
   const r = await runStepScript(ctx, ended, "post", ended.post, {
     cwd: ended.folder, folder: ended.home, vars,
     extra: {
@@ -263,16 +329,11 @@ export async function finishRun(ctx, run, change) {
   let ended = { ...run, ...change, ended: now() };
   if (run.terminal) {
     const tail = await host.tail(run.terminal).catch(() => null);
-    if (tail) await store.writeRunFile(run.id, "tail.txt", tail).catch(() => {});
+    // hc read gives the screen above the history lines asked for.
+    if (tail) await store.writeRunFile(run.id, "tail.txt", tail.split("\n").slice(-TAIL_LINES - (tail.endsWith("\n") ? 1 : 0)).join("\n")).catch(() => {});
   }
   let mine = false;
-  const setLast = (s, value) => {
-    // A Run that never opened a tab keeps the previous Run's, so that tab is still the one
-    // the next Run closes and Go to tab shows.
-    const prev = s.last[run.automation];
-    const last = value.tab || !prev?.tab || prev.status === "timed out" ? value : { ...value, space: prev.space, tab: prev.tab };
-    return { ...s, last: { ...s.last, [run.automation]: last } };
-  };
+  const setLast = (s, value) => ({ ...s, last: { ...s.last, [run.automation]: value } });
   await store.updateState((s) => {
     mine = Boolean(s.runs[run.id]);
     if (!mine) return s;

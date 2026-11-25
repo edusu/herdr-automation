@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { store, automationError, latestRuns } from "../mods/automation/store.js";
+import { store, automationError, latestRuns, EMPTY_STATE } from "../mods/automation/store.js";
 import { writeFileSync as fsWrite } from "node:fs";
 import { io, tempRoot, removeRoot } from "./helpers.js";
 
@@ -67,7 +67,7 @@ test("state round trip, and a stale write is redone on the newer state", async (
   const root = await tempRoot();
   t.after(() => removeRoot(root));
   const s = store(root, io);
-  assert.deepEqual(await s.readState(), { checked: {}, runs: {}, last: {}, worktrees: {}, commits: {} });
+  assert.deepEqual(await s.readState(), EMPTY_STATE);
   await s.updateState((st) => ({ ...st, checked: { a: 1 } }));
   let calls = 0;
   const raw = await io.readTextFile(s.files.state);

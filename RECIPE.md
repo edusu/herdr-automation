@@ -39,19 +39,20 @@ Do not create Automations for the person unless they ask. They live in `~/.confi
 - Every copy ticks every 5 seconds with `cx.timer.every`; `init` returns before the timer while `checking()`. Only the copy holding the lease `automation.leader` in Herdr's shared state fires and follows Runs.
 - A schedule is computed from the wall clock, so a time that passed while Herdr was closed starts late inside `catchUp`, or is recorded as Missed.
 - An agent Run in a repository works in a new worktree; the agent may write only `<run folder>/out/` (`{run_dir}`). The engine keeps the post-script and `requireResult` in `state.json`, never reading them back from a file the agent could change.
-- Every git call carries `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat`.
+- Every git call carries `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat -c protocol.ext.allow=never -c diff.external=`; credential helpers and ssh stay the person's.
+- Run now and Stop are written to `state.json` as requests; the leader's tick carries them out, since the dialog's copy is cancelled soon after the dialog closes.
 - Every 10 minutes it removes old clean worktrees, and history days and run folders older than `historyRetention`.
 
 ## Built from
 
-`mods/automation/`: `main.js` and `views/` (the panel), `engine.js` (the tick and `DEFAULT_SETTINGS`), `runs.js` (a Run's steps), `triggers.js`, `cron.js`, `store.js` (the data folder and the checks of `automations.json`), `shell.js` (every `sh` and `git` command line), `host.js` (the only module that imports `herdr` for effects), `settings.js` (shared with the herdr-mods repository), `mod.json` (`place: none`, a 720 × 640 dialog for `mod.open`), `mod.schema.json` (the settings), `automations.schema.json` (the Automations file), `automation.svg`.
+`mods/automation/`: `main.js` and `views/` (the panel), `engine.js` (the tick), `runs.js` (a Run's steps and `DEFAULT_SETTINGS`), `triggers.js`, `cron.js`, `store.js` (the data folder and the checks of `automations.json`), `shell.js` (every `sh` and `git` command line), `host.js` (the only module that imports `herdr` for effects), `settings.js` (shared with the herdr-mods repository), `mod.json` (`place: none`, a 720 × 640 dialog for `mod.open`), `mod.schema.json` (the settings), `automations.schema.json` (the Automations file), `automation.svg`.
 
 It runs `sh`, `git`, `hc label`, `hc read` and `herdr-app do tab.new` / `space.new`; the README's "What it runs" lists each one and when.
 
 ## Watch out
 
 - A save in the mod's folder reloads every copy of the mod. The mod writes only to `~/.config/herdr-app/data/automation/`.
-- `mod.schema.json`, `DEFAULT_SETTINGS` in `engine.js` and the README's settings table must agree; `tests/settings.test.js` checks them. `automations.schema.json` and the field lists in `store.js` must agree too; `tests/schema.test.js` checks them.
+- `mod.schema.json`, `DEFAULT_SETTINGS` in `runs.js` and the README's settings table must agree; `tests/settings.test.js` checks them. `automations.schema.json` and the field lists in `store.js` must agree too; `tests/schema.test.js` checks them.
 
 ## Done when
 

@@ -1,7 +1,7 @@
 // One Automation: its actions and the history of its Runs.
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { describe, nextTimes, when } from "../cron.js";
+import { describe, when } from "../cron.js";
 import { latestRuns } from "../store.js";
 import { TEXT, button, card, label, note, dot, span } from "./ui.js";
 
@@ -10,7 +10,7 @@ export function detail(m, t) {
   if (!a) return v_flex().p(14).child(note(t, "This Automation is gone."));
   const now = Date.now(), going = m.going(a.id);
   const runs = latestRuns(m.history).filter((e) => e.automation === a.id);
-  const next = nextTimes(a.trigger, now, 1)[0];
+  const next = m.next(a.trigger);
   return v_flex().gap(6).p(10)
     .child(div().font_semibold().child(a.name))
     .child(note(t, [a.kind === "agent" ? `Agent ${a.agent || m.settings.agent}` : "Script", a.folder].join(" · ")))
@@ -31,7 +31,7 @@ export function detail(m, t) {
       .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { m.openRun(e, cx); cx.notify(); })
       .child(dot(t, e.status))
       .child(v_flex().flex_1().min_w(0)
-        .child(div().truncate().child(`${e.status}${e.count > 1 ? ` ×${e.count}` : ""} · ${e.trigger ?? ""}${m.state.worktrees?.[e.run]?.review ? " · needs review" : ""}`))
+        .child(div().truncate().child(`${e.status}${e.count > 1 ? ` ×${e.count}` : ""} · ${e.trigger ?? ""}${m.state.worktrees[e.run]?.review ? " · needs review" : ""}`))
         .child(div().truncate().text_size(TEXT.label).text_color(t.dim).child([
           when(e.started ?? e.at, now),
           e.ended && e.status !== "skipped" && e.status !== "missed" ? span(e.ended - e.started) : e.status === "running" || e.status === "blocked" ? span(now - e.started) : null,

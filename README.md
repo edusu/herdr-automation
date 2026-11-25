@@ -71,8 +71,8 @@ Each Automation has one Trigger, and Run now.
 
 - **Schedule**: `{"type": "schedule", "preset": "every", "minutes": 15}` (counted from midnight), `"daily"` with `"at": "09:00"`, `"weekdays"` with `"at"` and `"days"` (0 is Sunday), or `"cron"` with `"cron": "0 9 * * 1-5"` (minute hour day month weekday; `*`, numbers, ranges, lists, steps). Always the computer's local time. The form shows the next three times.
 - **Manual**: `{"type": "manual"}`. Only Run now.
-- **Agent status**: `{"type": "agent", "status": "done"}` or `"blocked"` (needs you). `"inFolder": true` keeps only agents inside the Automation's folder; `"app": "claude"` keeps only that agent app. The Run works in the folder of the agent that fired it. An agent an Automation started, or one in the Automations space, never fires one, so two Automations cannot start each other.
-- **Git**: `{"type": "git", "source": "local"}` fires on a new commit on the current branch of the folder. `{"type": "git", "source": "remote", "branch": "origin/main"}` fires on new commits of that remote branch, read with `git ls-remote` every `gitPollInterval`. The first look only records the commit. A branch switch does not fire. A worktree Run starts from the commit that fired it.
+- **Agent status**: `{"type": "agent", "status": "done"}` or `"blocked"` (needs you). `"inFolder": true` keeps only agents inside the Automation's folder; `"app": "claude"` keeps only that agent app. The Run works in the folder of the agent that fired it. An agent an Automation started (its terminal carries the Run label) never fires one, so two Automations cannot start each other.
+- **Git**: `{"type": "git", "source": "local"}` fires on a new commit on the current branch of the folder. `{"type": "git", "source": "remote", "branch": "origin/main"}` fires on new commits of that remote branch, read with `git ls-remote` every `gitPollInterval`; a local one looks every 30 seconds. The first look only records the commit. A branch switch does not fire. A worktree Run starts from the commit that fired it.
 
 A time that passed while Herdr was closed or the computer slept starts once, late, inside `catchUp`; otherwise it is recorded as Missed. What comes due while paused is recorded as skipped and is not replayed.
 
@@ -82,16 +82,16 @@ A time that passed while Herdr was closed or the computer slept starts once, lat
 2. **Pre-script**: a failure fails the Run. Its output is `{pre}`.
 3. **Workspace**: for a worktree, `git fetch`, then `git worktree add` on a new branch `auto/<name>-<run id>`.
 4. **Main step**, in a tab of the `space` setting, opened without taking focus: the agent with its prompt, or the script's command.
-5. **Post-script**: runs where the Run worked, with the status and the result. A failure fails an ok Run.
+5. **Post-script**: runs where the Run worked, with the status and the result. A failure turns an ok Run into failed; a Run that already ended as failed, closed, stopped or timed out keeps its status.
 
 Check and pre-script run in the Automation's folder. Their output, and the post-script's, is saved with the Run.
 
 - An agent Run is `ok` when the agent finishes its turn. When it needs you it is `blocked`: a toast, the tab stays, and the Run goes on when the agent works again. Agents start in their normal interactive mode; nothing skips permissions unless your `args` say so.
 - A script Run ends with its command's exit code; 0 is `ok`.
-- After its timeout a Run is `timed out` and its tab stays open. **Stop** ends it as `stopped`; closing its tab ends it as `closed`.
+- After its timeout a Run is `timed out` and its tab stays open until the next Run of that Automation starts. **Stop** ends it as `stopped`, also while it is still starting; closing its tab ends it as `closed`.
 - A Trigger that fires while the previous Run of that Automation is still going is skipped and recorded. Nothing is queued.
-- One live tab per Automation: a new Run closes the tab of the previous one once it has ended.
-- With several Herdr windows, one copy of the mod fires Runs; the others only show them.
+- One live tab per Automation: a new Run closes the tab of the previous one once it has ended. A Run that ends before its tab opens leaves the previous tab as it is.
+- With several Herdr windows, one copy of the mod fires Runs; the others only show them. Run now and Stop from any copy, the dialog too, are handed to that copy through `state.json`, and the Run shows as starting at once.
 
 Statuses: `running`, `blocked`, `ok`, `failed`, `timed out`, `stopped`, `closed`, `skipped` (check, overlap, paused), `missed`.
 
@@ -114,16 +114,16 @@ A worktree is at `<worktrees dir>/<repo>/auto-<name>-<run id>`, where the worktr
 - After `worktreeRetention` a clean worktree is removed. Its branch goes with it when the branch has no commits of its own; a branch with commits stays until you merge or delete it.
 - A worktree with uncommitted changes is never removed by the mod. Its Run shows "needs review".
 - An ended Run's detail has **Open a tab here** while the worktree exists, and **Remove worktree**, which asks first when it is dirty.
-- git in a worktree runs with `core.fsmonitor`, `core.hooksPath` and `core.pager` turned off, so a config an agent left there runs nothing.
+- git in a worktree runs with fsmonitor, hooks, the pager, external diff and the `ext` protocol turned off, so a config an agent left there runs nothing.
 
 ## The panel
 
 - **Header**: pause everything, and **+** for a new Automation.
-- **List**: each Automation with its Trigger in words, the next time, how the last Run went or how long the current one has been going, an on/off switch, **Run now**, and **Go to tab** while its last Run's tab is open.
+- **List**: each Automation with its Trigger in words, the next time, how the last Run went or how long the current one has been going, an on/off switch, **Run now**, and **Go to tab** while the Automation's live tab (the tab its latest Run opened) is open.
 - **Detail**: Run now, Stop, Edit, Delete (asks first), and the history. A row goes to the Run's tab while it is open; otherwise it shows the saved output (Check, pre-script, the last 200 lines of the terminal, post-script, result file), the branch and the worktree.
 - **Form**: every field above, the folder through Herdr's folder picker, schedule presets or cron with the next three times, and checks before saving.
 - **Dialog**: `mod.open:automation` (`cmd-shift-a` with the key from RECIPE.md) shows the same view in a dialog, with the panel shown or not. Esc closes it, and so does Go to tab.
-- **Toasts**: by the `notifications` setting. A click goes to the Run's terminal.
+- **Toasts**: by the `notifications` setting. A click goes to the Run's terminal while its tab is open; otherwise (skipped, missed, a closed tab) it opens the dialog, unless the dialog is open already.
 - Problems in `automations.json` or the settings, and a failing git look, are listed at the top.
 
 ## Settings
@@ -159,9 +159,9 @@ Everything the mod writes is in `~/.config/herdr-app/data/automation/`, never in
 - `automations.json`: `{ "paused": false, "automations": [...] }`. Read again every 5 seconds.
 - `history/<YYYY-MM-DD>.jsonl`: one line per Run event, kept for `historyRetention`.
 - `runs/<run id>/`: `automation.json` (the definition when the Run started, for the record), `check.txt`, `pre.txt`, `post.txt` and their `.err.txt`, `tail.txt` (the terminal's last 200 lines), `exit` (a script's exit code) and `out/result.md`. Removed with its history.
-- `state.json`: what the engine remembers between starts: Runs going, the last Run of each Automation, the last time checked, the last commit seen, worktrees to purge.
+- `state.json`: what the engine remembers between starts: Runs going, the last Run of each Automation, each Automation's live tab, the last time checked, the last commit seen, worktrees to purge, and Run now and Stop waiting for the leader.
 
-Commands: `mod.open:automation` opens or closes the dialog. Toasts carry `pane.focus` or `agent.focus` for the Run's terminal.
+Commands: `mod.open:automation` opens or closes the dialog. Toasts carry `pane.focus` or `agent.focus` for the Run's terminal, or `mod.open` for the dialog.
 
 ## Limits
 
@@ -172,6 +172,7 @@ Commands: `mod.open:automation` opens or closes the dialog. Toasts carry `pane.f
 - One Trigger per Automation, and no file-change Trigger.
 - Only Claude Code is given `--add-dir` for the result file automatically.
 - A Run that was starting when Herdr quit is marked failed at the next start.
+- git runs in your repositories with your own git configuration (credential helpers, ssh, remotes), as your own git commands do, with fsmonitor, hooks, the pager, external diff and the `ext` protocol turned off.
 
 ## What it runs
 
@@ -179,8 +180,8 @@ Every command line is in [shell.js](mods/automation/shell.js). User values go in
 
 - `sh`, through `env`: the Check, pre- and post-script (`sh -c <inline>`, or the file as a program), and a script Run's command in its tab (`env HERDR_AUTO_…=… sh -c 'sh -c "$1"; printf "%s" "$?" > "$2"'`), which writes the exit code to the Run's folder.
 - The agent: the `run` command of its entry in Herdr's known agents, then `--add-dir` for Claude Code, `--model` and your `args`, in the Run's tab.
-- `git`, every call with `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat`: `rev-parse` and `symbolic-ref` to find the repository, its commit and branch (the form, each Run, local git Triggers every tick); `remote`, `fetch`, `ls-remote --symref` and `worktree add` when a worktree Run starts; `ls-remote` for remote git Triggers every `gitPollInterval`; `status --porcelain` and `rev-list --count` to look at a worktree; `worktree remove`, `worktree prune` and `branch -D` in the purge and Remove worktree.
-- `hc label <terminal> herdr.automation.run=<run id>` when a Run's tab opens, and `hc read <terminal> --lines 200` when it ends.
+- `git`, in your repositories and with your own git configuration, as your own git commands run, every call with `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat -c protocol.ext.allow=never -c diff.external=` (fsmonitor, hooks, pager, external diff and the `ext` protocol off; credential helpers and ssh stay yours, so fetch works with your remotes): `rev-parse` to find the repository, its commit and branch (the form, each Run, local git Triggers every 30 seconds); `remote`, `fetch` (of the remote a remote git Trigger names, else `origin`), `ls-remote --symref` and `worktree add` when a worktree Run starts; `ls-remote` for remote git Triggers every `gitPollInterval`; `status --porcelain` and `rev-list --count` to look at a worktree; `worktree remove`, `worktree prune` and `branch -D` in the purge and Remove worktree.
+- `hc label <terminal> herdr.automation.run=<run id>` when a Run's tab opens, and `hc read <terminal> --lines 200` when it ends; of the screen and history it prints, the last 200 lines are kept.
 - `herdr-app do tab.new` or `herdr-app do space.new` to open a Run's tab without focus.
 
 The purge of old worktrees, history and run folders runs every 10 minutes.

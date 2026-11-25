@@ -4,7 +4,7 @@
 const MINUTE = 60000;
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const WEEKDAYS = [1, 2, 3, 4, 5];
-const FIELDS = [["minute", 0, 59], ["hour", 0, 23], ["day", 1, 31], ["month", 1, 12], ["weekday", 0, 7]];
+const CRON_FIELDS = [["minute", 0, 59], ["hour", 0, 23], ["day", 1, 31], ["month", 1, 12], ["weekday", 0, 7]];
 // The longest search for a next time: a 29 February cron can wait almost eight years.
 const SEARCH_DAYS = 366 * 8;
 // A sleep gap of weeks on an every-minute schedule stays bounded.
@@ -28,7 +28,7 @@ function field(text, [name, lo, hi]) {
 export function parseCron(expr) {
   const parts = String(expr ?? "").trim().split(/\s+/);
   if (parts.length !== 5 || !parts[0]) throw new Error("A cron needs 5 fields: minute hour day month weekday");
-  const [minute, hour, day, month, weekday] = parts.map((p, i) => field(p, FIELDS[i]));
+  const [minute, hour, day, month, weekday] = parts.map((p, i) => field(p, CRON_FIELDS[i]));
   return { minute, hour, day, month, weekday, anyDay: parts[2] === "*", anyWeekday: parts[4] === "*" };
 }
 
@@ -117,8 +117,9 @@ export function dueBetween(trigger, from, to) {
 }
 
 const UNITS = { s: 1000, m: MINUTE, h: 60 * MINUTE, d: 1440 * MINUTE };
-/** "90s", "15m", "2h" or "7d" in ms, or null when it is not such a duration. */
+/** "90s", "15m", "2h" or "7d", or a positive number of ms (as the settings take it), in ms; else null. */
 export function durationMs(value) {
+  if (typeof value === "number") return value > 0 ? value : null;
   const m = /^\s*(\d+(?:\.\d+)?)\s*(s|m|h|d)\s*$/.exec(String(value ?? ""));
   return m ? Math.round(Number(m[1]) * UNITS[m[2]]) : null;
 }
@@ -127,7 +128,8 @@ export function durationMs(value) {
 export const defaultCatchUp = (trigger) =>
   trigger?.type === "schedule" && (trigger.preset === "daily" || trigger.preset === "weekdays") ? 2 * 60 * MINUTE : 0;
 
-const pad = (n) => String(n).padStart(2, "0");
+/** Two digits: 7 → "07". */
+export const pad = (n) => String(n).padStart(2, "0");
 /** Local "HH:MM" of instant `t`. */
 export const hhmm = (t) => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 /** "Today 09:00", "Tomorrow 09:00" or "Mon 3 Dec 09:00" for instant `t` seen at `now`. */

@@ -2,24 +2,13 @@
 import { div } from "gpui-kit";
 import { h_flex, v_flex, Input, Textarea } from "gpui-base";
 import { nextTimes, compile, when, DAY_NAMES } from "../cron.js";
+import { VARIABLES, defaultWorkspace } from "../runs.js";
 import { TEXT, button, chip, toggle, label, note } from "./ui.js";
+import { WEEK, formTrigger } from "./form-model.js";
 
 const PRESETS = [["manual", "Manual"], ["every", "Every N min"], ["daily", "Daily"], ["weekdays", "Weekdays"], ["cron", "Cron"], ["agent", "Agent status"], ["git", "Git"]];
-const STEPS = [["check", "Check (exit 0 goes on, else the Run is skipped)"], ["pre", "Pre-script (its output is {pre})"], ["post", "Post-script (runs where the Run worked)"]];
-// Monday first, as people read a week.
-const WEEK = [1, 2, 3, 4, 5, 6, 0];
-
-/** The Trigger the form describes now. */
-export function formTrigger(f) {
-  const p = f.preset;
-  if (p === "manual") return { type: "manual" };
-  if (p === "agent") return { type: "agent", status: f.agentStatus, inFolder: f.inFolder || undefined, app: f.app.value().trim() || undefined };
-  if (p === "git") return { type: "git", source: f.gitSource, branch: f.gitSource === "remote" ? f.gitBranch.value().trim() : undefined };
-  if (p === "every") return { type: "schedule", preset: p, minutes: Number(f.minutes.value().trim()) };
-  if (p === "daily") return { type: "schedule", preset: p, at: f.at.value().trim() };
-  if (p === "weekdays") return { type: "schedule", preset: p, at: f.at.value().trim(), days: WEEK.filter((d) => f.days.includes(d)) };
-  return { type: "schedule", preset: "cron", cron: f.cron.value().trim() };
-}
+const STEP_TITLES = [["check", "Check (exit 0 goes on, else the Run is skipped)"], ["pre", "Pre-script (its output is {pre})"], ["post", "Post-script (runs where the Run worked)"]];
+const VARIABLES_NOTE = `Variables: ${VARIABLES.map((v) => `{${v}}`).join(" ")}. In shell text, leave them unquoted.`;
 
 export function form(m, t) {
   const f = m.form;
@@ -29,7 +18,7 @@ export function form(m, t) {
   const trigger = formTrigger(f);
   let preview;
   if (trigger.type === "manual") preview = note(t, "Runs only with Run now.");
-  else if (trigger.type === "agent") preview = note(t, "Agents started by an Automation, or in its space, never fire one. The Run works in the folder of the agent that fired it.");
+  else if (trigger.type === "agent") preview = note(t, "Agents started by an Automation never fire one. The Run works in the folder of the agent that fired it.");
   else if (trigger.type === "git") preview = note(t, "The first look only records the commit; a branch switch does not fire.");
   else {
     try {
@@ -41,7 +30,7 @@ export function form(m, t) {
     }
   }
   const daily = f.preset === "daily" || f.preset === "weekdays";
-  const workspace = f.workspace ?? (f.kind === "agent" && f.isRepo && f.preset !== "agent" ? "worktree" : "folder");
+  const workspace = f.workspace ?? defaultWorkspace(f.kind, trigger.type, f.isRepo);
   return v_flex().gap(6).p(10)
     .child(div().font_semibold().child(f.id ? "Edit Automation" : "New Automation"))
     .child(label(t, "Name")).child(input(f.name))
@@ -57,7 +46,7 @@ export function form(m, t) {
       .child(label(t, "Extra arguments (separated by spaces)")).child(input(f.args))
       .child(label(t, "Prompt")).child(area(f.prompt)))
     .when(f.kind === "script", (el) => el.child(label(t, "Command (run with sh where the Run works)")).child(area(f.command)))
-    .child(note(t, "Variables: {pre} {check} {folder} {trigger} {commit} {branch} {date} {result_file} {run_dir}. In shell text, leave them unquoted."))
+    .child(note(t, VARIABLES_NOTE))
     .child(label(t, "Workspace"))
     .child(row(...[
       f.isRepo === false && workspace !== "worktree" ? null : chip(t, "ws-worktree", "New worktree", workspace === "worktree", () => { f.workspace = "worktree"; }),
@@ -65,7 +54,7 @@ export function form(m, t) {
       f.isRepo === false ? note(t, "Not a git repository") : null,
     ].filter(Boolean)))
     .when(workspace === "worktree", (el) => el.child(label(t, "Base (a git ref)")).child(input(f.base)))
-    .children(STEPS.map(([k, title]) => v_flex().gap(4)
+    .children(STEP_TITLES.map(([k, title]) => v_flex().gap(4)
       .child(label(t, title))
       .child(h_flex().gap(6).items_center()
         .child(chip(t, `${k}-inline`, "Inline", f[`${k}Mode`] === "inline", () => { f[`${k}Mode`] = "inline"; }))

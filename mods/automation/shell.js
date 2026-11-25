@@ -29,8 +29,9 @@ export function runScript(exec, script, { cwd, env, timeout }) {
 }
 
 // A Run's worktree, and the repository after an agent worked in it, may hold a config or hook
-// the agent planted; these keep git from running any program such config names.
-const SAFE = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat"];
+// the agent planted; these keep git from running any program such config names. Credential
+// helpers and ssh stay the person's own, so fetch works with their remotes.
+const SAFE = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat", "-c", "protocol.ext.allow=never", "-c", "diff.external="];
 const git = (exec, cwd, args, timeout = 60000) => exec("git", [...SAFE, ...args], { cwd, timeout }).catch(failed);
 const output = (r) => (r.stderr || r.stdout).trim();
 
@@ -40,10 +41,15 @@ export async function repoRoot(exec, folder) {
   return r.code === 0 ? r.stdout.trim() : null;
 }
 
-/** `{commit, branch}` of the checkout in `folder`; empty strings outside a repository, branch empty when detached. */
+/**
+ * `{commit, branch}` of the checkout in `folder`, from one git process; empty strings outside a
+ * repository or before its first commit, branch empty when detached.
+ */
 export async function head(exec, folder) {
-  const [c, b] = await Promise.all([git(exec, folder, ["rev-parse", "HEAD"]), git(exec, folder, ["symbolic-ref", "--quiet", "--short", "HEAD"])]);
-  return { commit: c.code === 0 ? c.stdout.trim() : "", branch: b.code === 0 ? b.stdout.trim() : "" };
+  const r = await git(exec, folder, ["rev-parse", "HEAD", "--symbolic-full-name", "HEAD"]);
+  if (r.code !== 0) return { commit: "", branch: "" };
+  const [commit, ref = ""] = r.stdout.trim().split("\n");
+  return { commit, branch: ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : "" };
 }
 
 // "origin/main": the branch the remote's HEAD names, from the fetched refs or else by asking it.
@@ -57,16 +63,18 @@ async function defaultBranch(exec, root, remote) {
 }
 
 /**
- * Makes the worktree of a Run: fetches the remote, then `git worktree add` at
+ * Makes the worktree of a Run in the repository `root` (null when `folder` is not in one):
+ * fetches `remote` (default: origin, else the first remote), then `git worktree add` at
  * `<dir>/<repo>/auto-<name>` on a new branch `auto/<name>` from `base` (default: the remote's
  * default branch; with no remote, HEAD). Resolves `{repo, path, branch, start}`, `start` being
  * the commit it started from. Rejects with git's output.
  */
-export async function addWorktree(exec, { folder, base, dir, name }) {
-  const root = await repoRoot(exec, folder);
+export async function addWorktree(exec, { root, folder, remote, base, dir, name }) {
   if (!root) throw new Error(`${folder} is not a git repository, so it cannot have a worktree`);
-  const remotes = (await git(exec, root, ["remote"])).stdout.split("\n").map((s) => s.trim()).filter(Boolean);
-  const remote = remotes.includes("origin") ? "origin" : remotes[0];
+  if (!remote) {
+    const remotes = (await git(exec, root, ["remote"])).stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+    remote = remotes.includes("origin") ? "origin" : remotes[0];
+  }
   if (remote) {
     const f = await git(exec, root, ["fetch", "--quiet", remote], 120000);
     if (f.code !== 0) throw new Error(`git fetch ${remote} failed: ${output(f)}`);

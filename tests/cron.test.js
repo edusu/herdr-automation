@@ -65,6 +65,10 @@ test("Triggers in words, durations and the default Catch-up", () => {
   assert.equal(durationMs("2h"), 7200000);
   assert.equal(durationMs("7d"), 604800000);
   assert.equal(durationMs("soon"), null);
+  // A plain number is milliseconds, as the settings accept it.
+  assert.equal(durationMs(1209600000), 1209600000);
+  assert.equal(durationMs(0), null);
+  assert.equal(durationMs(-5), null);
   assert.equal(defaultCatchUp({ type: "schedule", preset: "daily", at: "09:00" }), 7200000);
   assert.equal(defaultCatchUp({ type: "schedule", preset: "weekdays", at: "09:00" }), 7200000);
   assert.equal(defaultCatchUp({ type: "schedule", preset: "every", minutes: 5 }), 0);

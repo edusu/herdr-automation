@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { automationError, FIELDS, TRIGGER_FIELDS, SCRIPT_FIELDS } from "../mods/automation/store.js";
+import { automationError, AUTOMATION_FIELDS, TRIGGER_FIELDS, SCRIPT_FIELDS } from "../mods/automation/store.js";
 
 const root = new URL("..", import.meta.url).pathname;
 const schema = JSON.parse(fs.readFileSync(root + "mods/automation/automations.schema.json", "utf8"));
@@ -12,7 +12,7 @@ test("the schema and the validator know the same fields", () => {
   assert.deepEqual(keys(schema), ["$schema", "automations", "paused"]);
   const entry = schema.$defs.automation;
   assert.equal(entry.additionalProperties, false);
-  assert.deepEqual(keys(entry), [...FIELDS].sort());
+  assert.deepEqual(keys(entry), [...AUTOMATION_FIELDS].sort());
   assert.deepEqual(keys(schema.$defs.script), [...SCRIPT_FIELDS].sort());
   const triggers = Object.fromEntries(schema.$defs.trigger.oneOf.map((t) => [t.properties.type.const, keys(t)]));
   assert.deepEqual(Object.keys(triggers).sort(), Object.keys(TRIGGER_FIELDS).sort());

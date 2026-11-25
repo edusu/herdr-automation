@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { DEFAULT_SETTINGS } from "../mods/automation/engine.js";
+import { DEFAULT_SETTINGS } from "../mods/automation/runs.js";
 
 const root = new URL("..", import.meta.url).pathname;
 const json = (p) => JSON.parse(fs.readFileSync(root + p, "utf8"));

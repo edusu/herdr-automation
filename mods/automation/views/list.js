@@ -1,7 +1,7 @@
 // The header and the list of Automations.
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { describe, nextTimes, when } from "../cron.js";
+import { describe, when } from "../cron.js";
 import { TEXT, flat, toggle, note, dot, span } from "./ui.js";
 
 /** The header: the title, pause everything and +. */
@@ -22,11 +22,10 @@ export function list(m, t) {
   if (!m.doc.automations.length)
     return v_flex().p(14).gap(6).child(note(t, "No Automations yet. Press + to make one."));
   return v_flex().px(4).py(4).gap(1).children(m.doc.automations.map((a) => {
-    const going = m.going(a.id), last = m.state.last[a.id];
-    const next = a.enabled === false || m.doc.paused ? null : nextTimes(a.trigger, now, 1)[0];
+    const going = m.going(a.id), last = m.state.last[a.id], tab = m.state.tabs[a.id];
+    const next = a.enabled === false || m.doc.paused ? null : m.next(a.trigger);
     const status = going?.status ?? last?.status;
     const parts = [describe(a.trigger), next ? `next ${when(next, now)}` : a.enabled === false ? "off" : null].filter(Boolean);
-    const tab = going ?? last;
     return h_flex().id(`row-${a.id}`).px(6).py(6).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => m.show({ name: "detail", id: a.id }, cx))
       .child(status ? dot(t, status) : div().size(8).flex_none())

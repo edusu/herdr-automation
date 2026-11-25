@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEngine, LEASE_MS } from "../mods/automation/engine.js";
+import { createEngine, LEASE_MS, LOCAL_GIT_MS } from "../mods/automation/engine.js";
 import { agentFirings } from "../mods/automation/triggers.js";
 import { RUN_LABEL } from "../mods/automation/runs.js";
 import { store, automationError } from "../mods/automation/store.js";
@@ -59,12 +59,12 @@ test("the folder and app filters, and the loop guard", () => {
     onAgent({ id: "codex", trigger: { type: "agent", status: "done", app: "codex" } }),
     onAgent({ id: "blocked", trigger: { type: "agent", status: "blocked" } }),
   ];
-  const fired = (now) => agentFirings({ seen: new Map([["t9", "working"]]), agents: [now], automations, space: "Automations" }).firings.map((f) => f.automation.id);
+  const fired = (now) => agentFirings({ seen: new Map([["t9", "working"]]), agents: [now], automations }).firings.map((f) => f.automation.id);
   assert.deepEqual(fired(agent("done", { folder: "/work/app/src" })), ["any", "folder", "claude"]);
   assert.deepEqual(fired(agent("done", { folder: "/work/application" })), ["any", "claude"], "a sibling folder with the same prefix is not inside");
   assert.deepEqual(fired(agent("blocked")), ["blocked"]);
   assert.deepEqual(fired(agent("done", { labels: { [RUN_LABEL]: "20261125-090000-abcd" } })), [], "an agent a Run started");
-  assert.deepEqual(fired(agent("done", { space: "Automations" })), [], "an agent in the Automations space");
+  assert.deepEqual(fired(agent("done", { space: "Automations" })), ["any", "folder", "claude"], "the space alone is no guard: a person's agent may work there");
 });
 
 test("agent-status and git Triggers are checked like the rest of automations.json", () => {
@@ -92,20 +92,24 @@ test("the agent's folder is where the Run works, as it is", async (t) => {
 
 test("local git: the first look records, a new commit fires with it, a branch switch does not", async (t) => {
   const g = await gitRepo(t);
-  const { s, host, engine } = await setup(t, [onGit(g.repo)], { root: g.root });
+  const { s, host, now, engine } = await setup(t, [onGit(g.repo)], { root: g.root });
+  now.add(LOCAL_GIT_MS);
   await tick(engine);
   assert.equal(host.opened.length, 0);
   assert.equal((await s.readState()).commits.g.commit, g.first);
   const second = await commit(g.repo, "two");
+  now.add(LOCAL_GIT_MS);
   await tick(engine);
   assert.equal(host.opened.length, 1);
   assert.equal(host.opened[0].task, `Look at ${second} (git ${second.slice(0, 7)} on main)`);
   git(g.repo, "checkout", "-q", "-b", "side", g.first);
+  now.add(LOCAL_GIT_MS);
   await tick(engine);
   assert.equal(host.opened.length, 1, "a branch switch is not a Trigger");
   assert.equal((await s.readState()).commits.g.branch, "side");
   await engine.stop(Object.keys((await s.readState()).runs)[0]);
   await commit(g.repo, "three");
+  now.add(LOCAL_GIT_MS);
   await tick(engine);
   assert.equal(host.opened.length, 2);
 });
@@ -131,6 +135,25 @@ test("remote git: a branch that moved fires at the poll interval, and the worktr
   assert.equal(git(g.repo, "rev-parse", "HEAD"), g.first, "the working copy is untouched");
 });
 
+test("remote git on another remote than origin: the worktree starts at the commit that fired", async (t) => {
+  const g = await gitRepo(t, { remote: true });
+  const upstream = `${g.root}/upstream.git`;
+  git(g.root, "init", "-q", "--bare", "-b", "main", upstream);
+  git(g.repo, "remote", "add", "upstream", upstream);
+  git(g.repo, "push", "-q", "upstream", "main");
+  const a = onGit(g.repo, { workspace: "worktree", trigger: { type: "git", source: "remote", branch: "upstream/main" } });
+  const { s, host, now, engine } = await setup(t, [a], { root: g.root, settings: { ...SETTINGS, gitPollInterval: "5m" } });
+  await tick(engine);
+  git(g.root, "clone", "-q", upstream, "other");
+  const ahead = await commit(`${g.root}/other`, "two");
+  git(`${g.root}/other`, "push", "-q", "origin", "main");
+  now.add(6 * MIN);
+  await tick(engine);
+  assert.equal(host.opened.length, 1, JSON.stringify((await s.readState()).last));
+  const [run] = Object.values((await s.readState()).runs);
+  assert.equal(git(run.worktree, "rev-parse", "HEAD"), ahead);
+});
+
 test("a failing git command does not fire, is reported once, and does not stop the others", async (t) => {
   const root = await tempRoot();
   const manual = { id: "m", name: "Every", kind: "script", folder: "/tmp", command: "true", trigger: { type: "schedule", preset: "every", minutes: 15 } };
@@ -149,11 +172,14 @@ test("a failing git command does not fire, is reported once, and does not stop t
 
 test("a firing while paused is skipped and not replayed", async (t) => {
   const g = await gitRepo(t);
-  const { s, host, engine } = await setup(t, [onGit(g.repo, { enabled: false })], { root: g.root });
+  const { s, host, now, engine } = await setup(t, [onGit(g.repo, { enabled: false })], { root: g.root });
+  now.add(LOCAL_GIT_MS);
   await tick(engine);
   const second = await commit(g.repo, "two");
+  now.add(LOCAL_GIT_MS);
   await tick(engine);
   await setAutomations(s, [onGit(g.repo)]);
+  now.add(LOCAL_GIT_MS);
   await tick(engine);
   assert.equal(host.opened.length, 0);
   assert.deepEqual(await history(s), [["skipped", "paused", `git ${second.slice(0, 7)} on main`]]);
@@ -161,7 +187,7 @@ test("a firing while paused is skipped and not replayed", async (t) => {
 
 test("a slow Check delays neither another Automation's Run nor the lease", async (t) => {
   const every = (id, more) => ({ id, name: id, kind: "script", folder: "/tmp", command: "true", timeout: 60, trigger: { type: "schedule", preset: "every", minutes: 15 }, ...more });
-  const { s, host, now, make } = await setup(t, [every("slow", { check: { inline: "slow-check" } }), every("quick")]);
+  const { s, host, now, make } = await setup(t, [every("slow", { check: { inline: "slow-check", timeout: 600 } }), every("quick")]);
   let release;
   const gate = new Promise((r) => { release = r; });
   host.exec = (cmd, args, o) => (args.includes("slow-check") ? gate.then(() => ({ code: 0, stdout: "", stderr: "" })) : exec(cmd, args, o));
@@ -179,7 +205,8 @@ test("a slow Check delays neither another Automation's Run nor the lease", async
     assert.equal(await b.tick(), false);
   }
   assert.equal(Object.values((await s.readState()).runs).find((r) => r.automation === "slow").status, "starting");
-  now.set(new Date(2026, 10, 25, 9, 30, 5).getTime());
+  // Still inside the Check's own timeout, so the Run is alive.
+  now.set(new Date(2026, 10, 25, 9, 30, 1).getTime());
   await a.tick();
   release();
   await a.idle();

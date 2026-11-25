@@ -105,7 +105,7 @@ test("the engine follows a Run to its end: script exit code, timeout, Stop, clos
   assert.ok(host.live.has(r2.terminal), "a timed-out tab stays");
 
   const r3 = await engine.runNow(every);
-  assert.deepEqual(host.closed, ["tab1"], "a timed-out Run's tab is not closed");
+  assert.deepEqual(host.closed, ["tab1", "tab2"], "a timed-out Run has ended, so its tab goes");
   await engine.stop(r3.id);
   assert.equal((await s.readState()).last.e.status, "stopped");
   assert.deepEqual(host.killed, [r3.terminal]);
@@ -136,6 +136,51 @@ test("an agent Run: blocked posts a toast, then done is ok", async (t) => {
   host.status.set(run.terminal, "done");
   await tick(engine);
   assert.deepEqual(await statuses(s), ["running", "blocked", "running", "ok"]);
+});
+
+test("closing an agent Run's tab by hand ends it as closed, not as an exited agent", async (t) => {
+  const agent = { ...every, id: "g", kind: "agent", prompt: "Hi", trigger: { type: "manual" } };
+  const { s, host, engine } = await setup(t, [agent], at(25, 9));
+  const run = await engine.runNow(agent);
+  host.status.set(run.terminal, "working");
+  await tick(engine);
+  // Herdr drops the agent and its terminal together.
+  host.live.delete(run.terminal);
+  host.status.delete(run.terminal);
+  await tick(engine);
+  assert.equal((await s.readState()).runs[run.id].status, "running");
+  await tick(engine);
+  const { last } = await s.readState();
+  assert.deepEqual([last.g.status, last.g.reason], ["closed", "The tab was closed"]);
+});
+
+test("Run now and Stop from any copy are done by the leader", async (t) => {
+  const { s, host, make } = await setup(t, [every], at(25, 9));
+  const leader = make("leader"), other = make("other");
+  await tick(leader);
+  assert.equal(await tick(other), false);
+  await other.askRun(every);
+  const [request] = Object.values((await s.readState()).requests);
+  assert.deepEqual([request.type, request.automation], ["run", "e"]);
+  await tick(other);
+  assert.equal(host.opened.length, 0, "only the leader starts it");
+  await tick(leader);
+  assert.equal(host.opened.length, 1);
+  const st = await s.readState();
+  assert.deepEqual(st.requests, {});
+  const [run] = Object.values(st.runs);
+  assert.equal(run.trigger, "manual");
+  await other.askStop(run.id);
+  await tick(leader);
+  assert.equal((await s.readState()).last.e.status, "stopped");
+  assert.deepEqual(host.killed, [run.terminal]);
+  // Stop on a Run still waiting for the leader takes the request back.
+  await other.askRun(every);
+  const [id] = Object.keys((await s.readState()).requests);
+  await other.askStop(id);
+  await tick(leader);
+  assert.equal(host.opened.length, 1);
+  assert.deepEqual((await s.readState()).requests, {});
 });
 
 test("a Run going on survives an engine restart and is not started twice", async (t) => {

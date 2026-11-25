@@ -3,9 +3,6 @@
 import { head, remoteCommit } from "./shell.js";
 import { RUN_LABEL } from "./runs.js";
 
-/** The agent statuses an agent-status Trigger can wait for. */
-export const AGENT_STATUSES = ["done", "blocked"];
-
 // "done" also covers "idle": an agent finishing while someone looks at it goes straight to idle.
 const statusOf = (s) => (s === "blocked" ? "blocked" : s === "done" || s === "idle" ? "done" : s === "working" ? "working" : null);
 
@@ -26,10 +23,10 @@ export function agentMatches(automation, agent) {
  * status ("working", "blocked" or "done"); pass the previous one back next time, or null when
  * the engine starts, so statuses already present never fire. `agents` are
  * `{address, status, app, program, space, folder, labels}`. An agent a Run started (its terminal
- * has the Run label) or one in a tab of space `space` fires nothing, so Automations cannot
- * start each other. Each firing is `{automation, agent, status}`.
+ * has the Run label) fires nothing, so Automations cannot start each other. Each firing is
+ * `{automation, agent, status}`.
  */
-export function agentFirings({ seen, agents, automations, space }) {
+export function agentFirings({ seen, agents, automations }) {
   const next = new Map(), firings = [];
   for (const agent of agents) {
     const now = statusOf(agent.status);
@@ -37,7 +34,7 @@ export function agentFirings({ seen, agents, automations, space }) {
     next.set(agent.address, now);
     const before = seen?.get(agent.address);
     if (!before || before === now || now === "working") continue;
-    if (agent.labels?.[RUN_LABEL] || agent.space === space) continue;
+    if (agent.labels?.[RUN_LABEL]) continue;
     for (const a of automations)
       if (a.trigger.type === "agent" && a.trigger.status === now && agentMatches(a, agent)) firings.push({ automation: a, agent, status: now });
   }
