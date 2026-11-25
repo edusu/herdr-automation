@@ -37,6 +37,18 @@ test("an agent changing status fires once, and not again while the status stays"
   assert.deepEqual(await history(s), [["running", null, "agent t9 done"]]);
 });
 
+test("a turn too short to be seen working still fires, by the terminal's count of turns", async (t) => {
+  const { host, engine } = await setup(t, [onAgent()]);
+  host.agentList = [agent("done", { turn: 1 })];
+  await tick(engine);
+  await tick(engine);
+  assert.equal(host.opened.length, 0);
+  host.agentList = [agent("idle", { turn: 2 })];
+  await tick(engine);
+  await tick(engine);
+  assert.equal(host.opened.length, 1);
+});
+
 test("statuses already present when the engine starts do not fire", async (t) => {
   const { host, engine } = await setup(t, [onAgent(), onAgent({ id: "b", trigger: { type: "agent", status: "blocked" } })]);
   host.agentList = [agent("done"), agent("blocked", { address: "t10" })];
@@ -59,7 +71,7 @@ test("the folder and app filters, and the loop guard", () => {
     onAgent({ id: "codex", trigger: { type: "agent", status: "done", app: "codex" } }),
     onAgent({ id: "blocked", trigger: { type: "agent", status: "blocked" } }),
   ];
-  const fired = (now) => agentFirings({ seen: new Map([["t9", "working"]]), agents: [now], automations }).firings.map((f) => f.automation.id);
+  const fired = (now) => agentFirings({ seen: new Map([["t9", { status: "working", turn: 1 }]]), agents: [now], automations }).firings.map((f) => f.automation.id);
   assert.deepEqual(fired(agent("done", { folder: "/work/app/src" })), ["any", "folder", "claude"]);
   assert.deepEqual(fired(agent("done", { folder: "/work/application" })), ["any", "claude"], "a sibling folder with the same prefix is not inside");
   assert.deepEqual(fired(agent("blocked")), ["blocked"]);

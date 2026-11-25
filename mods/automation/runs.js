@@ -173,11 +173,14 @@ export function observe(run, obs, now) {
     return code === "0" ? { status: "ok" } : { status: "failed", reason: `Exit code ${code}` };
   }
   if (!obs.alive) return { status: "closed", reason: "The tab was closed" };
-  if (now >= run.deadline) return { status: "timed out", reason: `No end after ${Math.round((run.deadline - run.started) / 60000)} min` };
+  if (now >= run.deadline) return { status: "timed out", reason: `No end after ${Math.max(1, Math.round((run.deadline - run.started) / 60000))} min` };
   if (run.kind !== "agent") return null;
   const s = obs.agent;
-  if (s === "blocked") return run.status === "blocked" ? null : { status: "blocked", seen: true, sawWork: true };
+  if (s === "blocked") return run.status === "blocked" ? null : { status: "blocked", seen: true };
   if (s === "working") return run.status === "running" && run.sawWork ? null : { status: "running", seen: true, sawWork: true };
+  // An agent that opens on a question of its own (Claude Code asking to trust a new folder) is
+  // idle for a moment after the answer, before it takes its prompt: that is not the end.
+  if (s === "idle" && run.status === "blocked" && !run.sawWork) return { status: "running" };
   // "done" is a finished turn; "idle" too once someone has looked, but only after it worked,
   // since a new agent is idle before its first message arrives.
   if (s === "done" || (s === "idle" && run.sawWork)) return { status: "ok" };

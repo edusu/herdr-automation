@@ -171,6 +171,8 @@ Commands: `mod.open:automation` opens or closes the dialog. Toasts carry `pane.f
 - Schedules use the computer's local time; there are no time zones per Automation.
 - One Trigger per Automation, and no file-change Trigger.
 - Only Claude Code is given `--add-dir` for the result file automatically.
+- The prompt is the agent's last argument, after `args`. An option in `args` that takes several values, such as Claude Code's `--allowedTools`, must not come last, or it takes the prompt as one of them and the agent starts with none.
+- Claude Code asks whether to trust a repository it has not seen; the Run shows `blocked` until you answer in its tab, and then goes on.
 - A Run that was starting when Herdr quit is marked failed at the next start.
 - git runs in your repositories with your own git configuration (credential helpers, ssh, remotes), as your own git commands do, with fsmonitor, hooks, the pager, external diff and the `ext` protocol turned off.
 
@@ -181,8 +183,7 @@ Every command line is in [shell.js](mods/automation/shell.js). User values go in
 - `sh`, through `env`: the Check, pre- and post-script (`sh -c <inline>`, or the file as a program), and a script Run's command in its tab (`env HERDR_AUTO_…=… sh -c 'sh -c "$1"; printf "%s" "$?" > "$2"'`), which writes the exit code to the Run's folder.
 - The agent: the `run` command of its entry in Herdr's known agents, then `--add-dir` for Claude Code, `--model` and your `args`, in the Run's tab.
 - `git`, in your repositories and with your own git configuration, as your own git commands run, every call with `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat -c protocol.ext.allow=never -c diff.external=` (fsmonitor, hooks, pager, external diff and the `ext` protocol off; credential helpers and ssh stay yours, so fetch works with your remotes): `rev-parse` to find the repository, its commit and branch (the form, each Run, local git Triggers every 30 seconds); `remote`, `fetch` (of the remote a remote git Trigger names, else `origin`), `ls-remote --symref` and `worktree add` when a worktree Run starts; `ls-remote` for remote git Triggers every `gitPollInterval`; `status --porcelain` and `rev-list --count` to look at a worktree; `worktree remove`, `worktree prune` and `branch -D` in the purge and Remove worktree.
-- `hc label <terminal> herdr.automation.run=<run id>` when a Run's tab opens, and `hc read <terminal> --lines 200` when it ends; of the screen and history it prints, the last 200 lines are kept.
-- `herdr-app do tab.new` or `herdr-app do space.new` to open a Run's tab without focus.
+- `hc label <terminal> herdr.automation.run=<run id>` when a Run's tab opens, and `hc read <terminal> --lines 200` when it ends; of the screen and history it prints, the last 200 lines are kept.- `herdr-app do tab.new` or `herdr-app do space.new` to open a Run's tab without focus.
 
 The purge of old worktrees, history and run folders runs every 10 minutes.
 

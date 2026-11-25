@@ -63,19 +63,19 @@ export const host = {
   alive: (terminal) => Boolean(terminal) && terminals().some((t) => t.address === terminal),
   /**
    * One look for a tick: `terminals`, the set of terminal addresses, and `agents`, the agents on
-   * this computer as `{address, status, app, program, space, folder, labels}`, with the live
-   * folder of the agent's pane and its terminal's labels.
+   * this computer as `{address, status, turn, app, program, space, folder, labels}`, with the live
+   * folder of the agent's pane and its terminal's labels and count of turns.
    */
   look() {
     const all = terminals();
     const folders = new Map(panes().map((p) => [p.terminal, p.cwd]));
-    const labels = new Map(all.map((t) => [t.address, t.labels ?? {}]));
+    const byAddress = new Map(all.map((t) => [t.address, t]));
     // An address with a machine prefix is on another computer, out of scope for v1.
     return {
       terminals: new Set(all.map((t) => t.address)),
       agents: agents().filter((a) => !a.address.includes("/")).map((a) => ({
         address: a.address, status: a.status, app: a.app, program: a.program?.key ?? null, space: a.space_name,
-        folder: folders.get(a.address) ?? null, labels: labels.get(a.address) ?? {},
+        folder: folders.get(a.address) ?? null, labels: byAddress.get(a.address)?.labels ?? {}, turn: byAddress.get(a.address)?.turn ?? null,
       })),
     };
   },

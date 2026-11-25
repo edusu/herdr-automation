@@ -138,6 +138,22 @@ test("an agent Run: blocked posts a toast, then done is ok", async (t) => {
   assert.deepEqual(await statuses(s), ["running", "blocked", "running", "ok"]);
 });
 
+test("an agent Run blocked before any work does not end on idle", async (t) => {
+  const agent = { ...every, id: "g", kind: "agent", prompt: "Hi", trigger: { type: "manual" } };
+  const { s, host, engine } = await setup(t, [agent], at(25, 9));
+  const run = await engine.runNow(agent);
+  for (const status of ["blocked", "idle", "idle"]) {
+    host.status.set(run.terminal, status);
+    await tick(engine);
+  }
+  assert.equal((await s.readState()).runs[run.id].status, "running");
+  host.status.set(run.terminal, "working");
+  await tick(engine);
+  host.status.set(run.terminal, "idle");
+  await tick(engine);
+  assert.equal((await s.readState()).last.g.status, "ok");
+});
+
 test("closing an agent Run's tab by hand ends it as closed, not as an exited agent", async (t) => {
   const agent = { ...every, id: "g", kind: "agent", prompt: "Hi", trigger: { type: "manual" } };
   const { s, host, engine } = await setup(t, [agent], at(25, 9));

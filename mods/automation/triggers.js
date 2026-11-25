@@ -20,9 +20,11 @@ export function agentMatches(automation, agent) {
 
 /**
  * One look at the agents: `{seen, firings}`. `seen` maps each agent terminal to its last
- * status ("working", "blocked" or "done"); pass the previous one back next time, or null when
- * the engine starts, so statuses already present never fire. `agents` are
- * `{address, status, app, program, space, folder, labels}`. An agent a Run started (its terminal
+ * `{status, turn}` (status "working", "blocked" or "done"); pass the previous one back next
+ * time, or null when the engine starts, so statuses already present never fire. `agents` are
+ * `{address, status, turn, app, program, space, folder, labels}`, `turn` being the terminal's
+ * count of turns: a turn shorter than the time between two looks never shows as "working", but
+ * the count has grown. An agent a Run started (its terminal
  * has the Run label) fires nothing, so Automations cannot start each other. Each firing is
  * `{automation, agent, status}`.
  */
@@ -31,9 +33,10 @@ export function agentFirings({ seen, agents, automations }) {
   for (const agent of agents) {
     const now = statusOf(agent.status);
     if (!now) continue;
-    next.set(agent.address, now);
+    const turn = agent.turn ?? null;
+    next.set(agent.address, { status: now, turn });
     const before = seen?.get(agent.address);
-    if (!before || before === now || now === "working") continue;
+    if (!before || now === "working" || (before.status === now && !(now === "done" && turn > before.turn))) continue;
     if (agent.labels?.[RUN_LABEL]) continue;
     for (const a of automations)
       if (a.trigger.type === "agent" && a.trigger.status === now && agentMatches(a, agent)) firings.push({ automation: a, agent, status: now });
