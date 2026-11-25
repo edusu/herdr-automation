@@ -58,7 +58,7 @@ test("state round trip, and a stale write is redone on the newer state", async (
   const root = await tempRoot();
   t.after(() => removeRoot(root));
   const s = store(root, io);
-  assert.deepEqual(await s.readState(), { checked: {}, runs: {}, last: {}, worktrees: {} });
+  assert.deepEqual(await s.readState(), { checked: {}, runs: {}, last: {}, worktrees: {}, commits: {} });
   await s.updateState((st) => ({ ...st, checked: { a: 1 } }));
   let calls = 0;
   const raw = await io.readTextFile(s.files.state);

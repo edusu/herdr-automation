@@ -1,10 +1,12 @@
-// The tick: leader lease, Runs going, due schedule Triggers, Catch-up, Missed, pauses and the
-// purge of old worktrees.
+// The tick: leader lease, Runs going, due schedule Triggers, Catch-up, Missed, agent-status and
+// git Triggers, pauses and the purge of old worktrees. Starting and ending a Run (scripts, git,
+// tabs) go on beside the tick, so one slow step never holds the others or the lease.
 // The engine keeps nothing that matters in memory: Runs going and the last instant checked
 // per Automation are in state.json, so the next engine after a reload carries on.
 import { dueBetween, defaultCatchUp, durationMs } from "./cron.js";
 import { startRun, finishRun, updateRun, observe, newRunId, event, ENDED, STARTING_MS } from "./runs.js";
 import { inspectWorktree, removeWorktree } from "./shell.js";
+import { agentFirings, gitHead, gitFiring } from "./triggers.js";
 
 /** How long a leader's lease lasts without renewal. */
 export const LEASE_MS = 30000;
@@ -38,6 +40,7 @@ export function decide({ count, latest, from, now, catchUp, paused }) {
 
 /** How often the tick looks for worktrees to purge. */
 export const PURGE_MS = 10 * 60000;
+const DEFAULT_GIT_POLL = 5 * 60000;
 const DEFAULT_RETENTION = 7 * 24 * 60 * 60000;
 
 /**
@@ -81,13 +84,36 @@ export async function purgeWorktrees(ctx) {
  */
 export function createEngine({ store, host, lease, id, settings, now = Date.now }) {
   const ctx = { store, host, now, get settings() { return settings(); } };
-  const gone = new Map();
-  let busy = false, purged = -Infinity;
+  const gone = new Map(), polled = new Map();
+  // Work going on beside the tick, by key: one start per firing, one end per Run, one git look
+  // per Automation, the purge. A failure is reported by the next tick.
+  const work = new Map();
+  let busy = false, purged = -Infinity, seq = 0, failure = null, agentsSeen = null;
+  const spawn = (key, fn) => {
+    if (work.has(key)) return;
+    work.set(key, Promise.resolve().then(fn).catch((e) => { failure ??= e; }).finally(() => work.delete(key)));
+  };
+  // Every firing starts on its own; the overlap rule in startRun decides between them.
+  // Automations with a start going on here: their "starting" Run is alive, however long it takes.
+  const starting = new Map();
+  const start = (a, trigger, due, fired) => {
+    starting.set(a.id, (starting.get(a.id) ?? 0) + 1);
+    spawn(`start:${seq++}`, () => startRun(ctx, a, trigger, due, fired).finally(() => {
+      const n = starting.get(a.id) - 1;
+      if (n) starting.set(a.id, n);
+      else starting.delete(a.id);
+    }));
+  };
+  const paused = (doc, a) => doc.paused || a.enabled === false;
 
   /** Whether this copy fires Runs: it holds a live lease, renewed at half its life, or takes a free one. */
   function leader() {
     const t = now(), l = lease.get();
-    if (l && l.owner !== id && l.until > t) return false;
+    if (l && l.owner !== id && l.until > t) {
+      // Agent statuses seen before losing the lease would be stale when it comes back.
+      agentsSeen = null;
+      return false;
+    }
     if (!l || l.owner !== id || l.until - t < LEASE_MS / 2) lease.set({ owner: id, until: t + LEASE_MS });
     return lease.get()?.owner === id;
   }
@@ -95,8 +121,9 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
   async function watchRuns() {
     const { runs } = await store.readState();
     for (const run of Object.values(runs)) {
+      if (work.has(`end:${run.id}`)) continue;
       if (run.status === "starting") {
-        if (now() > (run.startBy ?? run.started + STARTING_MS)) await finishRun(ctx, run, { status: "failed", reason: "Herdr stopped while the Run was starting" });
+        if (!starting.has(run.automation) && now() > (run.startBy ?? run.started + STARTING_MS)) await finishRun(ctx, run, { status: "failed", reason: "Herdr stopped while the Run was starting" });
         continue;
       }
       const alive = host.alive(run.terminal);
@@ -111,14 +138,14 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
       if (!change) continue;
       if (ENDED.includes(change.status)) {
         gone.delete(run.id);
-        await finishRun(ctx, run, change);
+        spawn(`end:${run.id}`, () => finishRun(ctx, run, change));
       } else await updateRun(ctx, run, change);
     }
   }
 
-  async function record(a, status, reason, count, due) {
+  async function record(a, status, reason, count, due, trigger = "schedule") {
     const at = now();
-    await store.appendHistory(event({ id: newRunId(at), automation: a.id, name: a.name, kind: a.kind, trigger: "schedule", due, started: at, ended: at, status, reason, count }, at));
+    await store.appendHistory(event({ id: newRunId(at), automation: a.id, name: a.name, kind: a.kind, trigger, due, started: at, ended: at, status, reason, count }, at));
   }
 
   async function fireDue(doc) {
@@ -130,10 +157,47 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
       const { count, latest } = from === undefined ? { count: 0, latest: null } : dueBetween(a.trigger, from, t);
       if (from !== undefined && !count) continue;
       await store.updateState((s) => ({ ...s, checked: { ...s.checked, [a.id]: t } }));
-      const d = decide({ count, latest, from, now: t, catchUp: catchUpMs(a), paused: doc.paused || a.enabled === false });
+      const d = decide({ count, latest, from, now: t, catchUp: catchUpMs(a), paused: paused(doc, a) });
       if (d.skipped) await record(a, "skipped", "paused", d.skipped, latest);
       if (d.missed) await record(a, "missed", d.missed > 1 ? `${d.missed} times passed while Herdr was closed or the computer slept` : "Passed while Herdr was closed or the computer slept", d.missed, latest);
-      if (d.fire) await startRun(ctx, a, d.fire, latest);
+      if (d.fire) start(a, d.fire, latest);
+    }
+  }
+
+  // A firing while paused is recorded as skipped and never replayed.
+  async function fire(doc, a, trigger, fired) {
+    if (paused(doc, a)) await record(a, "skipped", "paused", 1, null, trigger);
+    else start(a, trigger, null, fired);
+  }
+
+  async function fireAgents(doc) {
+    const r = agentFirings({ seen: agentsSeen, agents: host.agents(), automations: doc.automations, space: settings().space });
+    agentsSeen = r.seen;
+    for (const { automation, agent, status } of r.firings)
+      await fire(doc, automation, `agent ${agent.address} ${status}`, agent.folder ? { folder: agent.folder } : {});
+  }
+
+  // A local Trigger looks every tick (git rev-parse is cheap); a remote one at gitPollInterval.
+  // The commit seen is in state.json, with the error of a failing look until one succeeds.
+  function fireGit(doc) {
+    const every = durationMs(settings().gitPollInterval) ?? DEFAULT_GIT_POLL;
+    for (const a of doc.automations) {
+      if (a.trigger.type !== "git") continue;
+      if (a.trigger.source === "remote" && now() - (polled.get(a.id) ?? -Infinity) < every) continue;
+      spawn(`git:${a.id}`, async () => {
+        polled.set(a.id, now());
+        let seen, error = null;
+        try { seen = await gitHead(host.exec, a); } catch (e) { error = e?.message ?? String(e); }
+        let last;
+        await store.updateState((s) => {
+          last = s.commits[a.id];
+          const next = error ? { ...last, error } : { commit: seen.commit, branch: seen.branch };
+          if (JSON.stringify(next) === JSON.stringify(last)) return s;
+          return { ...s, commits: { ...s.commits, [a.id]: next } };
+        });
+        const commit = error ? null : gitFiring(last, seen);
+        if (commit) await fire(doc, a, `git ${commit.slice(0, 7)}${seen.branch ? ` on ${seen.branch}` : ""}`, { commit });
+      });
     }
   }
 
@@ -148,14 +212,25 @@ export function createEngine({ store, host, lease, id, settings, now = Date.now 
         const doc = await store.readAutomations();
         await watchRuns();
         await fireDue(doc);
+        await fireAgents(doc);
+        fireGit(doc);
         if (now() - purged >= PURGE_MS) {
           purged = now();
-          await purgeWorktrees(ctx);
+          spawn("purge", () => purgeWorktrees(ctx));
         }
       } finally {
         busy = false;
       }
+      if (failure) {
+        const e = failure;
+        failure = null;
+        throw e;
+      }
       return true;
+    },
+    /** Resolves once the work going on beside the tick (starting and ending Runs, git looks) is done. */
+    async idle() {
+      while (work.size) await Promise.all(work.values());
     },
     /** Run now. A Run of it still going makes this one skipped (overlap). */
     runNow: (automation) => startRun(ctx, automation, "manual"),

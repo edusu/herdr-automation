@@ -57,6 +57,11 @@ test("Triggers in words, durations and the default Catch-up", () => {
   assert.equal(describe({ type: "schedule", preset: "weekdays", at: "09:00", days: [5, 1] }), "Mon, Fri at 09:00");
   assert.equal(describe(cron("0 9 * * *")), "Cron 0 9 * * *");
   assert.equal(describe({ type: "manual" }), "Manual");
+  assert.equal(describe({ type: "agent", status: "done", inFolder: true, app: "claude" }), "When a claude agent in the folder is done");
+  assert.equal(describe({ type: "agent", status: "blocked" }), "When an agent needs you");
+  assert.equal(describe({ type: "git", source: "local" }), "New commit on the current branch");
+  assert.equal(describe({ type: "git", source: "remote", branch: "origin/main" }), "New commits on origin/main");
+  assert.deepEqual(nextTimes({ type: "git", source: "local" }, 0), []);
   assert.equal(durationMs("2h"), 7200000);
   assert.equal(durationMs("7d"), 604800000);
   assert.equal(durationMs("soon"), null);

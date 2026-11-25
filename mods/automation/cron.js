@@ -139,9 +139,15 @@ export function when(t, now) {
   return `${day} ${hhmm(t)}`;
 }
 
-/** The Trigger in words: "Every 15 minutes", "Daily at 09:00", "Mon, Fri at 09:00", "Cron 0 9 * * 1-5", "Manual". */
+/**
+ * The Trigger in words: "Every 15 minutes", "Daily at 09:00", "Mon, Fri at 09:00", "Cron 0 9 * * 1-5",
+ * "Manual", "When a claude agent in the folder is done", "New commit on the current branch", "New commits on origin/main".
+ */
 export function describe(trigger) {
   if (trigger?.type === "manual") return "Manual";
+  if (trigger?.type === "agent")
+    return `When ${trigger.app ? `a ${trigger.app} agent` : "an agent"}${trigger.inFolder ? " in the folder" : ""} ${trigger.status === "blocked" ? "needs you" : "is done"}`;
+  if (trigger?.type === "git") return trigger.source === "remote" ? `New commits on ${trigger.branch}` : "New commit on the current branch";
   if (trigger?.type !== "schedule") return trigger?.type ?? "Unknown";
   switch (trigger.preset) {
     case "every": return trigger.minutes === 1 ? "Every minute" : `Every ${trigger.minutes} minutes`;

@@ -28,7 +28,7 @@ const DEFAULT_SETTINGS = {
 const TICK_MS = 5000;
 const HISTORY_DAYS = 30;
 const STEPS = ["check", "pre", "post"];
-const FIELDS = ["name", "folder", "model", "args", "prompt", "command", "minutes", "at", "cron", "timeout", "catchUp", "base", ...STEPS.flatMap((k) => [k, `${k}Timeout`])];
+const FIELDS = ["name", "folder", "model", "args", "prompt", "command", "minutes", "at", "cron", "app", "gitBranch", "timeout", "catchUp", "base", ...STEPS.flatMap((k) => [k, `${k}Timeout`])];
 // The run files the panel shows for an ended Run, in pipeline order.
 const OUTPUTS = [["Check", "check.txt"], ["Check (stderr)", "check.err.txt"], ["Pre-script", "pre.txt"], ["Pre-script (stderr)", "pre.err.txt"],
   ["Terminal (last 200 lines)", "tail.txt"], ["Post-script", "post.txt"], ["Post-script (stderr)", "post.err.txt"], ["Result file", "result.md"]];
@@ -164,7 +164,7 @@ export default class Automation extends View {
     this.form = {
       id: a?.id ?? null, original: a ?? null,
       kind: a?.kind ?? "agent", agent: a?.agent ?? this.settings.agent, agents: [], agentsError: null,
-      preset: tr.type === "manual" ? "manual" : tr.preset, days: tr.days ?? [1, 2, 3, 4, 5], enabled: a?.enabled !== false, error: "",
+      preset: tr.type === "schedule" ? tr.preset : tr.type, days: tr.days ?? [1, 2, 3, 4, 5], enabled: a?.enabled !== false, error: "",
       name: text(a?.name, "What it does"),
       folder: text(a?.folder, "/path/to/folder"),
       model: text(a?.model, "The agent's default"),
@@ -174,6 +174,10 @@ export default class Automation extends View {
       minutes: text(tr.minutes ? String(tr.minutes) : "15", "15"),
       at: text(tr.at ?? "09:00", "09:00"),
       cron: text(tr.cron ?? "0 9 * * 1-5", "0 9 * * 1-5"),
+      agentStatus: tr.status ?? "done", inFolder: tr.inFolder === true,
+      app: text(tr.app, "Any (claude, codex…)"),
+      gitSource: tr.source ?? "local",
+      gitBranch: text(tr.branch, "origin/main"),
       timeout: text(a?.timeout ? String(a.timeout) : "", "From the settings"),
       catchUp: text(catchUp, "Default: 2h daily, none otherwise"),
       // null: the default, a worktree for an agent in a git repository.
@@ -258,6 +262,10 @@ export default class Automation extends View {
     const error = automationError(a);
     if (error) { f.error = `This Automation ${error}.`; return; }
     cx.spawn(async (cx) => {
+      if (a.trigger.type === "git" && !(await repoRoot(host.exec, a.folder))) {
+        f.error = "The folder is not a git repository, so a git Trigger has nothing to watch.";
+        return cx.notify();
+      }
       if (a.workspace === "worktree" && !(await repoRoot(host.exec, a.folder))) {
         f.error = "The folder is not a git repository, so a Run cannot have a worktree. Choose Folder.";
         return cx.notify();
@@ -275,7 +283,9 @@ export default class Automation extends View {
 
   render() {
     const t = theme();
-    const notices = [this.error, ...this.problems, ...this.doc.problems].filter(Boolean);
+    // A git Trigger whose last look failed, once per Automation until a look succeeds.
+    const gitErrors = this.doc.automations.filter((a) => this.state.commits?.[a.id]?.error).map((a) => `${a.name}: ${this.state.commits[a.id].error}`);
+    const notices = [this.error, ...this.problems, ...this.doc.problems, ...gitErrors].filter(Boolean);
     const body = this.screen.name === "form" && this.form ? form(this, t) : this.screen.name === "detail" ? detail(this, t) : list(this, t);
     return v_flex().id("root").size_full().bg(t.surface).text_size(TEXT.body).text_color(t.foreground)
       .child(header(this, t))

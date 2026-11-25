@@ -77,9 +77,13 @@ export function mainStep(automation, { agents, settings, exitFile, vars = {}, en
   };
 }
 
-/** Where a Run of `automation` works: its `workspace`, else a worktree for an agent in a git repository. */
+/**
+ * Where a Run of `automation` works: its `workspace`, else a worktree for an agent in a git
+ * repository. An agent-status Trigger defaults to the folder, so the Run sees that agent's work.
+ */
 export async function workspaceOf(exec, automation) {
   if (automation.workspace) return automation.workspace;
+  if (automation.trigger?.type === "agent") return "folder";
   return automation.kind === "agent" && (await repoRoot(exec, automation.folder)) ? "worktree" : "folder";
 }
 
@@ -135,12 +139,14 @@ export const event = (run, at) => {
 const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "automation";
 
 /**
- * Starts a Run of `automation` set off by `trigger` ("schedule", "catch-up" or "manual",
- * for the time `due`): Check, pre-script, workspace, then the main step in a tab. A previous
+ * Starts a Run of `automation` set off by `trigger` ("schedule", "catch-up", "manual", or the
+ * words of an agent-status or git firing), for the time `due`: Check, pre-script, workspace,
+ * then the main step in a tab. `fired.folder` (the agent's folder) replaces the Automation's
+ * folder; `fired.commit` (a git firing) is {commit} and a worktree's base. A previous
  * Run still going makes it a skipped Run (overlap). The Run is in state.json from its first
  * step, so a reload never starts it twice.
  */
-export async function startRun(ctx, automation, trigger, due = null) {
+export async function startRun(ctx, automation, trigger, due = null, fired = {}) {
   const { host, store, settings, now } = ctx;
   const run = {
     id: newRunId(now()), automation: automation.id, name: automation.name, kind: automation.kind, trigger, due, started: now(), status: "starting",
@@ -160,8 +166,9 @@ export async function startRun(ctx, automation, trigger, due = null) {
   try {
     await store.writeRunFile(run.id, "automation.json", JSON.stringify(automation, null, 2));
     const runDir = store.runDir(run.id);
-    const vars = { folder: automation.folder, trigger, date: dayKey(now()), run_dir: runDir, result_file: `${runDir}/result.md`, pre: "", check: "", commit: "", branch: "" };
-    const before = { cwd: automation.folder, folder: automation.folder, vars };
+    const folder = fired.folder ?? automation.folder;
+    const vars = { folder, trigger, date: dayKey(now()), run_dir: runDir, result_file: `${runDir}/result.md`, pre: "", check: "", commit: "", branch: "" };
+    const before = { cwd: folder, folder: automation.folder, vars };
     if (automation.check) {
       const r = await runStepScript(ctx, run, "check", automation.check, before);
       if (r.code !== 0) return finishRun(ctx, run, { status: "skipped", reason: r.line || `The Check exited with code ${r.code}` });
@@ -173,13 +180,13 @@ export async function startRun(ctx, automation, trigger, due = null) {
       vars.pre = r.value;
     }
     if ((await workspaceOf(host.exec, automation)) === "worktree") {
-      const wt = { ...(await addWorktree(host.exec, { folder: automation.folder, base: automation.base, dir: await host.worktreesDir(), name: `${slug(automation.name)}-${run.id}` })), created: now() };
+      const wt = { ...(await addWorktree(host.exec, { folder, base: fired.commit ?? automation.base, dir: await host.worktreesDir(), name: `${slug(automation.name)}-${run.id}` })), created: now() };
       // Registered at once, so the purge finds it even when the Run fails after this.
       await store.updateState((s) => ({ ...s, worktrees: { ...s.worktrees, [run.id]: wt } }));
       vars.folder = wt.path;
       current = { ...current, worktree: wt.path };
     }
-    Object.assign(vars, await head(host.exec, vars.folder));
+    Object.assign(vars, await head(host.exec, vars.folder), fired.commit ? { commit: fired.commit } : {});
     current = { ...current, folder: vars.folder, branch: vars.branch || undefined, commit: vars.commit || undefined };
     const step = mainStep(automation, {
       agents: automation.kind === "agent" ? await host.knownAgents() : [],

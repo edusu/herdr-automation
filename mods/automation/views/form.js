@@ -4,7 +4,7 @@ import { h_flex, v_flex, Input, Textarea } from "gpui-base";
 import { nextTimes, compile, when, DAY_NAMES } from "../cron.js";
 import { TEXT, button, chip, toggle, label, note } from "./ui.js";
 
-const PRESETS = [["manual", "Manual"], ["every", "Every N min"], ["daily", "Daily"], ["weekdays", "Weekdays"], ["cron", "Cron"]];
+const PRESETS = [["manual", "Manual"], ["every", "Every N min"], ["daily", "Daily"], ["weekdays", "Weekdays"], ["cron", "Cron"], ["agent", "Agent status"], ["git", "Git"]];
 const STEPS = [["check", "Check (exit 0 goes on, else the Run is skipped)"], ["pre", "Pre-script (its output is {pre})"], ["post", "Post-script (runs where the Run worked)"]];
 // Monday first, as people read a week.
 const WEEK = [1, 2, 3, 4, 5, 6, 0];
@@ -13,6 +13,8 @@ const WEEK = [1, 2, 3, 4, 5, 6, 0];
 export function formTrigger(f) {
   const p = f.preset;
   if (p === "manual") return { type: "manual" };
+  if (p === "agent") return { type: "agent", status: f.agentStatus, inFolder: f.inFolder || undefined, app: f.app.value().trim() || undefined };
+  if (p === "git") return { type: "git", source: f.gitSource, branch: f.gitSource === "remote" ? f.gitBranch.value().trim() : undefined };
   if (p === "every") return { type: "schedule", preset: p, minutes: Number(f.minutes.value().trim()) };
   if (p === "daily") return { type: "schedule", preset: p, at: f.at.value().trim() };
   if (p === "weekdays") return { type: "schedule", preset: p, at: f.at.value().trim(), days: WEEK.filter((d) => f.days.includes(d)) };
@@ -27,6 +29,8 @@ export function form(m, t) {
   const trigger = formTrigger(f);
   let preview;
   if (trigger.type === "manual") preview = note(t, "Runs only with Run now.");
+  else if (trigger.type === "agent") preview = note(t, "Agents started by an Automation, or in its space, never fire one. The Run works in the folder of the agent that fired it.");
+  else if (trigger.type === "git") preview = note(t, "The first look only records the commit; a branch switch does not fire.");
   else {
     try {
       compile(trigger);
@@ -37,7 +41,7 @@ export function form(m, t) {
     }
   }
   const daily = f.preset === "daily" || f.preset === "weekdays";
-  const workspace = f.workspace ?? (f.kind === "agent" && f.isRepo ? "worktree" : "folder");
+  const workspace = f.workspace ?? (f.kind === "agent" && f.isRepo && f.preset !== "agent" ? "worktree" : "folder");
   return v_flex().gap(6).p(10)
     .child(div().font_semibold().child(f.id ? "Edit Automation" : "New Automation"))
     .child(label(t, "Name")).child(input(f.name))
@@ -78,6 +82,18 @@ export function form(m, t) {
     .when(f.preset === "weekdays", (el) => el.child(row(...WEEK.map((d) => chip(t, `day-${d}`, DAY_NAMES[d], f.days.includes(d),
       () => { f.days = f.days.includes(d) ? f.days.filter((x) => x !== d) : [...f.days, d]; })))))
     .when(f.preset === "cron", (el) => el.child(input(f.cron)).child(note(t, "minute hour day month weekday, in local time")))
+    .when(f.preset === "agent", (el) => el
+      .child(row(div().child("When an agent"),
+        chip(t, "agent-done", "is done", f.agentStatus === "done", () => { f.agentStatus = "done"; }),
+        chip(t, "agent-blocked", "needs you", f.agentStatus === "blocked", () => { f.agentStatus = "blocked"; })))
+      .child(h_flex().gap(8).items_center().child(toggle(t, "agent-in-folder", f.inFolder, () => { f.inFolder = !f.inFolder; }))
+        .child(div().child("Only agents in the folder")))
+      .child(label(t, "Agent app (optional)")).child(input(f.app)))
+    .when(f.preset === "git", (el) => el
+      .child(row(
+        chip(t, "git-local", "New commit on the current branch", f.gitSource === "local", () => { f.gitSource = "local"; }),
+        chip(t, "git-remote", "New commits on a remote branch", f.gitSource === "remote", () => { f.gitSource = "remote"; })))
+      .when(f.gitSource === "remote", (el) => el.child(label(t, "Remote branch")).child(input(f.gitBranch))))
     .child(preview)
     .child(h_flex().gap(10)
       .child(v_flex().flex_1().gap(4).child(label(t, "Timeout in minutes")).child(input(f.timeout)))

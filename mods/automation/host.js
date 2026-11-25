@@ -1,6 +1,6 @@
 // The only module that reaches Herdr for effects: tabs, the space, terminals, agents, toasts,
 // programs (exec), the lease in shared state and file access. The engine and the views get these objects.
-import { exec, hc, run, spaces, terminals, agents, notify, knownAgents, readTextFile, writeTextFile, shared, setShared, appHome, home } from "herdr";
+import { exec, hc, run, spaces, terminals, agents, panes, notify, knownAgents, readTextFile, writeTextFile, shared, setShared, appHome, home } from "herdr";
 import * as fs from "fs/promises";
 
 /** File access for store.js. */
@@ -53,6 +53,19 @@ export const host = {
   kill: (terminal) => run("terminal.kill", { terminal }),
   alive: (terminal) => Boolean(terminal) && terminals().some((t) => t.address === terminal),
   agentStatus: (terminal) => agents().find((a) => a.address === terminal)?.status ?? null,
+  /**
+   * The agents on this computer for the agent-status Trigger: `{address, status, app, program,
+   * space, folder, labels}`, with the live folder of the agent's pane and its terminal's labels.
+   */
+  agents() {
+    const folders = new Map(panes().map((p) => [p.terminal, p.cwd]));
+    const labels = new Map(terminals().map((t) => [t.address, t.labels ?? {}]));
+    // An address with a machine prefix is on another computer, out of scope for v1.
+    return agents().filter((a) => !a.address.includes("/")).map((a) => ({
+      address: a.address, status: a.status, app: a.app, program: a.program?.key ?? null, space: a.space_name,
+      folder: folders.get(a.address) ?? null, labels: labels.get(a.address) ?? {},
+    }));
+  },
   async tail(terminal) {
     const r = await hc(["read", terminal, "--lines", "200"]);
     return r.code === 0 ? r.stdout : null;

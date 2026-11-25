@@ -79,6 +79,19 @@ export async function addWorktree(exec, { folder, base, dir, name }) {
 }
 
 /**
+ * The commit `remoteBranch` ("origin/main") points to on its remote, read with git ls-remote
+ * from the repository in `folder` without touching the working copy. Rejects with the reason.
+ */
+export async function remoteCommit(exec, folder, remoteBranch) {
+  const i = remoteBranch.indexOf("/"), remote = remoteBranch.slice(0, i), branch = remoteBranch.slice(i + 1);
+  const r = await git(exec, folder, ["ls-remote", "--", remote, `refs/heads/${branch}`], 120000);
+  if (r.code !== 0) throw new Error(`git ls-remote ${remote} failed: ${output(r)}`);
+  const commit = r.stdout.split("\t")[0].trim();
+  if (!commit) throw new Error(`${remoteBranch} is not a branch of ${remote}`);
+  return commit;
+}
+
+/**
  * What the purge needs to know of a worktree `{repo, path, branch, start}`: `exists`, `dirty`
  * (uncommitted or untracked files) and `commits` (on its branch since `start`; null when unknown).
  */

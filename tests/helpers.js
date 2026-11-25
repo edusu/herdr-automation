@@ -4,17 +4,24 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 
+const writing = new Map();
 /** Herdr's readTextFile / writeTextFile contract on the real disk. */
 export const io = {
   async readTextFile(p) {
     try { return await fs.readFile(p, "utf8"); } catch (e) { if (e.code === "ENOENT") return null; throw e; }
   },
-  async writeTextFile(p, text, expected) {
-    if ((await io.readTextFile(p)) !== expected) throw new Error("stale snapshot");
-    const tmp = `${p}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, text);
-    await fs.rename(tmp, p);
-    return null;
+  // Herdr compares and replaces in one step; here a queue per path does it, since the engine
+  // writes from work going on beside its tick.
+  writeTextFile(p, text, expected) {
+    const done = (writing.get(p) ?? Promise.resolve()).then(async () => {
+      if ((await io.readTextFile(p)) !== expected) throw new Error("stale snapshot");
+      const tmp = `${p}.${process.pid}.tmp`;
+      await fs.writeFile(tmp, text);
+      await fs.rename(tmp, p);
+      return null;
+    });
+    writing.set(p, done.catch(() => {}));
+    return done;
   },
   mkdir: (p, o) => fs.mkdir(p, o),
   readdir: (p) => fs.readdir(p),
@@ -78,7 +85,7 @@ export function fakeHost() {
   let n = 0;
   const h = {
     opened: [], closed: [], killed: [], labels: [], toasts: [],
-    live: new Set(), status: new Map(),
+    live: new Set(), status: new Map(), agentList: [],
     async openTab(args) {
       n++;
       h.opened.push(args);
@@ -91,6 +98,7 @@ export function fakeHost() {
     kill(t) { h.killed.push(t); h.live.delete(t); },
     alive: (t) => h.live.has(t),
     agentStatus: (t) => h.status.get(t) ?? null,
+    agents: () => h.agentList,
     tail: async (t) => (h.live.has(t) ? `tail of ${t}` : null),
     knownAgents: async () => [{ key: "claude", name: "Claude Code", run: ["claude"], installed: true }],
     exec,

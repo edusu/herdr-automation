@@ -7,10 +7,12 @@ import { compile, durationMs } from "./cron.js";
 export const SCRIPT_TIMEOUT_MAX = 600;
 
 const KINDS = ["agent", "script"];
-const TRIGGERS = ["schedule", "manual"];
+const TRIGGERS = ["schedule", "manual", "agent", "git"];
+// "origin/main": a remote name, a slash, a branch; neither part may read as a git option.
+const REMOTE_BRANCH = /^[A-Za-z0-9._][A-Za-z0-9._-]*\/[A-Za-z0-9._][^\s~^:?*\[\\]*$/;
 const WORKSPACES = ["worktree", "folder"];
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
-const EMPTY_STATE = { checked: {}, runs: {}, last: {}, worktrees: {} };
+const EMPTY_STATE = { checked: {}, runs: {}, last: {}, worktrees: {}, commits: {} };
 
 const pad = (n) => String(n).padStart(2, "0");
 /** Local "YYYY-MM-DD" of instant `t`. */
@@ -43,6 +45,16 @@ export function automationError(a) {
   if (!isObject(a.trigger) || !TRIGGERS.includes(a.trigger.type)) return `trigger type must be one of ${TRIGGERS.join(", ")}`;
   if (a.trigger.type === "schedule") {
     try { compile(a.trigger); } catch (e) { return `trigger: ${e.message}`; }
+  }
+  if (a.trigger.type === "agent") {
+    if (!["done", "blocked"].includes(a.trigger.status)) return 'trigger status must be "done" or "blocked"';
+    if (!optional(a.trigger.inFolder, (v) => typeof v === "boolean")) return "trigger inFolder must be true or false";
+    if (!optional(a.trigger.app, text)) return "trigger app must be an agent's name";
+  }
+  if (a.trigger.type === "git") {
+    if (!["local", "remote"].includes(a.trigger.source)) return 'trigger source must be "local" or "remote"';
+    if (a.trigger.source === "remote" && !(typeof a.trigger.branch === "string" && REMOTE_BRANCH.test(a.trigger.branch) && !a.trigger.branch.includes("..")))
+      return 'a remote git trigger needs a branch such as "origin/main"';
   }
   if (a.kind === "agent" && !text(a.prompt)) return "an agent Automation needs a prompt";
   if (a.kind === "script" && !text(a.command)) return "a script Automation needs a command";
@@ -117,7 +129,10 @@ export function store(root, io) {
     },
     /** Rewrites automations.json as `fn({paused, automations})`, where automations are the raw entries, bad ones too. */
     updateAutomations: (fn) => update(files.automations, doc, fn),
-    /** state.json: `{checked: {id: ms}, runs: {runId: run}, last: {id: run}, worktrees: {runId: worktree}}`; empty when missing. */
+    /**
+     * state.json: `{checked: {id: ms}, runs: {runId: run}, last: {id: run}, worktrees: {runId: worktree},
+     * commits: {id: {commit, branch, error}}}`; empty when missing. `commits` is the last commit a git Trigger saw.
+     */
     async readState() {
       const r = await readJson(files.state);
       return state(r.value);
