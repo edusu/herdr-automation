@@ -104,7 +104,7 @@ export const runEnv = (vars, run) => ({
 
 /**
  * The main step's tab: `{argv, task}`. An agent is its knownAgents() entry's `run`, then
- * `--add-dir {run_dir}` for Claude Code, `--model` when set, then the extra args, with the
+ * `--add-dir={run_dir}` for Claude Code, `--model` when set, then the extra args, with the
  * prompt as the tab's first message. A script gets the Run's environment.
  */
 export function mainStep(automation, { agents, settings, exitFile, vars = {}, env }) {
@@ -116,7 +116,9 @@ export function mainStep(automation, { agents, settings, exitFile, vars = {}, en
   return {
     argv: [
       ...entry.run,
-      ...(key === "claude" && vars.run_dir ? ["--add-dir", vars.run_dir] : []),
+      // One word: `--add-dir <dir>` takes every argument after it, so with no flag behind it the
+      // prompt Herdr appends would be read as a second directory.
+      ...(key === "claude" && vars.run_dir ? [`--add-dir=${vars.run_dir}`] : []),
       ...(automation.model ? ["--model", automation.model] : []),
       ...(automation.args ?? []),
     ],

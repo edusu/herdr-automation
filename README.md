@@ -106,7 +106,7 @@ The prompt, the command and inline scripts can use `{pre}`, `{check}`, `{folder}
 - The post-script also gets `HERDR_AUTO_STATUS`, `HERDR_AUTO_REASON`, `HERDR_AUTO_RESULT` (the first 8 KB of the result file), `HERDR_AUTO_TAIL_FILE` and `HERDR_AUTO_TERMINAL`.
 - `{pre}` and `{check}` are cut at 64 KB.
 
-`{run_dir}` is the Run's `out/` folder and `{result_file}` is `out/result.md` in it. It is the only part of the Run's folder an agent may write: Claude Code gets `--add-dir {run_dir}`. What the mod decides with (the post-script, `requireResult`, exit codes, script outputs) never comes from that folder. Other agents need your `args` to let them write there.
+`{run_dir}` is the Run's `out/` folder and `{result_file}` is `out/result.md` in it. It is the only part of the Run's folder an agent may write: Claude Code gets `--add-dir={run_dir}`. What the mod decides with (the post-script, `requireResult`, exit codes, script outputs) never comes from that folder. Other agents need your `args` to let them write there.
 
 ## Worktrees
 

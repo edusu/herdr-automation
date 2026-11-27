@@ -156,7 +156,7 @@ test("an agent Run: blocked posts a toast, then done is ok", async (t) => {
   const agent = { ...every, id: "g", kind: "agent", prompt: "Hi", trigger: { type: "manual" } };
   const { s, host, engine } = await setup(t, [agent], at(25, 9));
   const run = await engine.runNow(agent);
-  assert.deepEqual([host.opened[0].argv, host.opened[0].task], [["claude", "--add-dir", s.outDir(run.id)], "Hi"]);
+  assert.deepEqual([host.opened[0].argv, host.opened[0].task], [["claude", `--add-dir=${s.outDir(run.id)}`], "Hi"]);
   host.status.set(run.terminal, "working");
   await tick(engine);
   host.status.set(run.terminal, "blocked");

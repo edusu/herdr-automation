@@ -92,7 +92,7 @@ test("an agent's prompt gets the values and Claude Code may write in the Run's f
   const step = mainStep({ kind: "agent", prompt: "Read {pre}, write {result_file} in {folder}; keep {other}" }, {
     agents: [{ key: "claude", run: ["claude"], installed: true }], settings: SETTINGS, vars,
   });
-  assert.deepEqual(step.argv, ["claude", "--add-dir", "/data/runs/r1"]);
+  assert.deepEqual(step.argv, ["claude", "--add-dir=/data/runs/r1"]);
   assert.equal(step.task, `Read ${NASTY}, write /data/runs/r1/result.md in /repo; keep {other}`);
 });
 
@@ -114,7 +114,7 @@ test("a file the agent may write cannot change the post-script or requireResult"
     requireResult: true, post: { inline: `echo good > ${q(`${root}/post`)}` } };
   const run = await startRun(ctx, a, "manual");
   const out = `${s.runDir(run.id)}/out`;
-  assert.deepEqual(host.opened[0].argv, ["claude", "--add-dir", out]);
+  assert.deepEqual(host.opened[0].argv, ["claude", `--add-dir=${out}`]);
   const evil = JSON.stringify({ ...a, requireResult: false, post: { inline: `touch ${q(`${root}/pwned`)}` } });
   await io.writeTextFile(`${out}/automation.json`, evil, null);
   await io.writeTextFile(`${s.runDir(run.id)}/automation.json`, evil, await io.readTextFile(`${s.runDir(run.id)}/automation.json`));
